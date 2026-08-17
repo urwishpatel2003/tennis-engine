@@ -223,13 +223,15 @@ The Sackmann mirror stopped updating at 2026-05-25, so the archive is extended
 forward from a second source:
 
     ATP  → msolonskyi/ManTennisData (atptour.com scrape), current within days,
-           and with FULLER serve statistics than Sackmann
-    WTA  → NO CURRENT SOURCE. Stays at the Sackmann cutoff.
+           WITH serve statistics
+    WTA  → api.wtatennis.com, the tour's own public API (engine/wta_source.py).
+           Unauthenticated. Scores only — NO serve statistics, so those matches
+           move Elo but are skipped by the serve/return builder, which already
+           ignores rows without a stat line.
 
-That asymmetry is real and is surfaced per tour everywhere (`staleness_by_tour`
-in /api/fixtures, a named banner in the Today tab, `refresh --status`). Never
-report a single pooled freshness number — it reads as the ATP's and hides that
-every WTA price is months old.
+Freshness is still reported PER TOUR (`staleness_by_tour` in /api/fixtures, a
+named banner in the Today tab, `refresh --status`) — the two sources can drift
+apart independently, and a pooled number would hide that.
 
 ```bash
 python -m engine.refresh --status      # per-tour freshness

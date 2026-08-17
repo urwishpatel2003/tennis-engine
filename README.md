@@ -202,8 +202,12 @@ python -m engine.refresh --status      # per-tour freshness
 python -m engine.refresh               # append + rebuild
 ```
 
-**There is no equivalent WTA source**, so WTA ratings stay at the May cutoff. The
-dashboard names which tour is stale rather than reporting one pooled number.
+WTA comes from **api.wtatennis.com**, the tour's own public API — unauthenticated,
+the same JSON the official site consumes. It carries scores but no serve
+statistics, so those matches update Elo while the serve/return model relies on
+the historical stat lines.
+
+The dashboard reports freshness per tour, since the two sources can drift apart.
 
 Why it matters, concretely: on stale ratings the model priced Tabilo v Jodar at
 48.6% against a 31.8% market — a 17-point "edge". After refreshing, it prices the

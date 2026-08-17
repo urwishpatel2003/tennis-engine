@@ -14,11 +14,14 @@ first/second serve points won and attempted, break points saved and faced — wh
 is exactly what the serve/return model needs. So it is used to extend the archive
 forward.
 
-    ATP  → refreshed from ManTennisData
-    WTA  → NO CURRENT SOURCE EXISTS. It stays at the Sackmann cutoff.
+    ATP  → ManTennisData (atptour.com scrape) — includes serve statistics
+    WTA  → api.wtatennis.com, the tour's own public API — scores only, no serve
+           statistics, so those matches move Elo but are skipped by the
+           serve/return builder (which already ignores rows without a stat line).
 
-That asymmetry is deliberate and surfaced everywhere rather than hidden: a WTA
-prediction made today is running on months-old ratings and the dashboard says so.
+An earlier version of this file claimed no WTA source existed. That was wrong —
+one GitHub search is not a search. The WTA publishes the same JSON its own site
+consumes, unauthenticated.
 
 Design rules
 ------------
@@ -341,63 +344,127 @@ def status() -> dict:
             "matches": int(len(m)),
             "last_match": str(last.date()),
             "stale_days": int((pd.Timestamp.today().normalize() - last.normalize()).days),
-            "refreshable": tour == "atp",
+            "refreshable": True,
         }
     return out
 
 
-def refresh(rebuild: bool = True, verbose: bool = True) -> dict:
-    """Append new ATP results and rebuild. WTA has no current source."""
-    path = RAW / f"matches_atp.parquet"
-    if not path.exists():
-        raise FileNotFoundError("No ATP archive to extend — run fetch_data.py first.")
+def _fetch_new_wta(after: pd.Timestamp, verbose: bool = True) -> tuple[pd.DataFrame, dict]:
+    """Completed WTA main-draw singles after `after`, canonicalised."""
+    from engine import wta_source
+    from engine.schema import ROUND_ORD
 
+    players = pd.read_parquet(RAW / "players_wta.parquet")
+    resolver = PlayerResolver(players)
+    raw, stats = wta_source.fetch(after, resolver, verbose=verbose)
+    if raw.empty:
+        return pd.DataFrame(), stats
+
+    raw["_r"] = raw["round"].map(ROUND_ORD).fillna(99)
+    raw = raw.sort_values(["tourney_id", "_r", "src_id"]).reset_index(drop=True)
+    raw["match_num"] = raw.groupby("tourney_id").cumcount() + 1
+    raw = raw.drop(columns=["_r"])
+
+    canon = normalise_matches(raw, "wta")
+    canon["source"] = "wta_api"
+    if resolver.new_rows:
+        resolver.merged_players().to_parquet(RAW / "players_wta.parquet", index=False)
+
+    stats.update({
+        "new": int(len(canon)),
+        "players_matched": resolver.matched,
+        "players_minted": resolver.minted,
+        "date_range": [str(canon["tourney_date"].min().date()),
+                       str(canon["tourney_date"].max().date())] if len(canon) else None,
+    })
+    return canon, stats
+
+
+def _merge(tour: str, new: pd.DataFrame, verbose: bool = True) -> dict:
+    """
+    Append `new` to a tour's archive, refusing to lose rows silently.
+
+    The null/duplicate check is not defensive padding: ManTennisData's
+    `match_order` column is empty, which made every `match_id` NaN and let
+    `drop_duplicates` collapse 2,334 fetched matches into ONE on the first run.
+    A merge that quietly discards data is worse than a merge that fails.
+    """
+    path = RAW / f"matches_{tour}.parquet"
     existing = pd.read_parquet(path)
     last = existing["tourney_date"].max()
-    new, stats = fetch_new_atp(last, verbose=verbose)
+    before = {"matches": int(len(existing)), "last_match": str(last.date())}
 
-    result = {"before": {"matches": int(len(existing)), "last_match": str(last.date())},
-              "fetched": stats, "rebuilt": False}
-
-    if new.empty:
+    if new is None or new.empty:
         if verbose:
-            print("  [refresh] already up to date")
-        result["after"] = result["before"]
-        return result
+            print(f"  [refresh] {tour.upper()} already up to date")
+        return {"before": before, "after": before, "added": 0}
+
+    bad = int(new["match_id"].isna().sum())
+    dupes = int(new["match_id"].duplicated().sum())
+    if bad or dupes:
+        raise ValueError(
+            f"refusing to merge {tour}: {bad} null and {dupes} duplicate match_ids "
+            f"in {len(new)} fetched rows — that silently collapses matches on merge."
+        )
 
     for c in existing.columns:
         if c not in new.columns:
             new[c] = pd.NA
     if "source" not in existing.columns:
         existing["source"] = "sackmann"
-    bad = int(new["match_id"].isna().sum())
-    dupes = int(new["match_id"].duplicated().sum())
-    if bad or dupes:
-        raise ValueError(
-            f"refusing to merge: {bad} null and {dupes} duplicate match_ids in the "
-            f"{len(new)} fetched rows. That silently collapses matches on merge — "
-            f"check match_num assignment before retrying."
-        )
 
     merged = pd.concat([existing, new[existing.columns]], ignore_index=True)
-    before_dedupe = len(merged)
+    n0 = len(merged)
     merged = merged.drop_duplicates(subset=["match_id"], keep="first")
-    dropped = before_dedupe - len(merged)
-    if dropped:
-        print(f"  [refresh] {dropped} row(s) already present, skipped")
     merged = merged.sort_values(["tourney_date", "tourney_id", "match_num"]).reset_index(drop=True)
     merged.to_parquet(path, index=False)
 
-    result["after"] = {"matches": int(len(merged)),
-                       "last_match": str(merged["tourney_date"].max().date())}
+    after = {"matches": int(len(merged)),
+             "last_match": str(merged["tourney_date"].max().date())}
     if verbose:
-        print(f"  [refresh] {result['before']['matches']:,} → {result['after']['matches']:,} "
-              f"matches; now current to {result['after']['last_match']}")
+        dupe_note = f"  ({n0 - len(merged)} already present)" if n0 - len(merged) else ""
+        print(f"  [refresh] {tour.upper()}: {before['matches']:,} -> {after['matches']:,} "
+              f"matches; now current to {after['last_match']}{dupe_note}")
+    return {"before": before, "after": after,
+            "added": int(after["matches"] - before["matches"])}
 
-    if rebuild:
+
+def refresh(rebuild: bool = True, verbose: bool = True) -> dict:
+    """
+    Append new results for BOTH tours, then rebuild.
+
+    ATP comes from ManTennisData (with serve statistics); WTA from the tour's own
+    public API (scores only, no serve stats — those matches move Elo but are
+    skipped by the serve/return builder, which degrades cleanly).
+    """
+    result = {"tours": {}, "rebuilt": False}
+
+    for tour, fetcher in (("atp", fetch_new_atp), ("wta", _fetch_new_wta)):
+        path = RAW / f"matches_{tour}.parquet"
+        if not path.exists():
+            result["tours"][tour] = {"error": "no archive — run fetch_data.py first"}
+            continue
+        last = pd.read_parquet(path, columns=["tourney_date"])["tourney_date"].max()
+        try:
+            new, stats = fetcher(last, verbose=verbose)
+        except Exception as e:
+            # One tour's upstream being down must not block the other's refresh.
+            msg = f"{type(e).__name__}: {e}"[:200]
+            if verbose:
+                print(f"  [refresh] {tour.upper()} fetch failed — {msg}")
+            result["tours"][tour] = {"error": msg}
+            continue
+        merged = _merge(tour, new, verbose=verbose)
+        merged["fetched"] = stats
+        result["tours"][tour] = merged
+
+    added = sum(t.get("added", 0) for t in result["tours"].values())
+    result["added_total"] = added
+
+    if rebuild and added:
         from engine import conditions, matchups, ratings, serve_return
         if verbose:
-            print("  [refresh] rebuilding engine …")
+            print("  [refresh] rebuilding engine ...")
         pm, cur = ratings.build_all(("atp", "wta"))
         pm.to_parquet(PROCESSED / "ratings.parquet", index=False)
         cur.to_parquet(PROCESSED / "ratings_current.parquet", index=False)
@@ -408,6 +475,13 @@ def refresh(rebuild: bool = True, verbose: bool = True) -> dict:
             PROCESSED / "conditions.parquet", index=False)
         matchups.build_all(("atp", "wta")).to_parquet(PROCESSED / "h2h.parquet", index=False)
         result["rebuilt"] = True
+    elif rebuild and verbose:
+        print("  [refresh] nothing new — skipping rebuild")
+
+    # Back-compat for callers that read the old flat shape.
+    atp = result["tours"].get("atp", {})
+    if "before" in atp:
+        result["before"], result["after"] = atp["before"], atp["after"]
 
     result["completed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     (PROCESSED / "last_refresh.json").write_text(json.dumps(result, indent=2), encoding="utf-8")

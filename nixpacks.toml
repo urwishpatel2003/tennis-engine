@@ -30,11 +30,5 @@ cmds = [
   # run_engine builds on the next line anyway.
   "python -u -m engine.refresh --no-rebuild || echo '  (refresh skipped - building on base archive)'",
   "python -u run_engine.py --build",
-  # The Model tab reads data/processed/backtest_results.csv, and data/ is in both
-  # .gitignore and .railwayignore — so unless the build produces it, the deployed
-  # dashboard shows "no backtest yet" forever. ~80s with --no-scores.
-  # Never allowed to fail the build: the dashboard degrades to an explanatory
-  # message, which is far better than losing a deploy over a report.
-  "python -u backtest.py --seasons 2015-2026 --no-scores --by season surface tour || echo '  (backtest skipped)'",
   "python -u tools/build_report.py",
 ]

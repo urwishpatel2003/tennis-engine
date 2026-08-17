@@ -551,10 +551,35 @@ def api_tournament_bracket():
 
 @app.route("/api/backtest")
 def api_backtest():
-    p = PROCESSED / "backtest_results.csv"
-    if not p.exists():
-        return jsonify({"error": "no backtest yet — run python backtest.py"}), 404
-    return jsonify(_clean(pd.read_csv(p).to_dict("records")))
+    """
+    Backtest results, preferring a freshly generated file over the committed one.
+
+    The committed copy in reports/ exists because data/ is excluded from both git
+    and the Railway upload, so a locally generated file can never reach the
+    server — the Model tab would read "no backtest yet" forever. Running it during
+    the build was tried and pushed the build past its deadline, so it ships as a
+    report instead. It measures the MODEL, which changes far less often than the
+    data does.
+    """
+    local = PROCESSED / "backtest_results.csv"
+    shipped = Path(__file__).resolve().parent.parent / "reports" / "backtest_results.csv"
+    meta_path = shipped.parent / "backtest_meta.json"
+
+    src = local if local.exists() else (shipped if shipped.exists() else None)
+    if src is None:
+        return jsonify({"error": "no backtest available — run python backtest.py"}), 404
+
+    meta = {}
+    if meta_path.exists() and src == shipped:
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return jsonify(_clean({
+        "rows": pd.read_csv(src).to_dict("records"),
+        "meta": {**meta, "source": "generated on this instance" if src == local
+                 else "committed report"},
+    }))
 
 
 _start_refresh_thread()

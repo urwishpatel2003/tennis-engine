@@ -768,8 +768,10 @@ function sparkline(curve){
 async function viewModel(){
   $('#view').innerHTML = `<div class="card"><h2>Model validation</h2>
     <div id="out"><p class="muted">Loading…</p></div></div>`;
-  const d = await api('/api/backtest');
-  if(d.error){
+  const raw = await api('/api/backtest');
+  const d = Array.isArray(raw) ? raw : (raw.rows || raw);
+  const bmeta = (raw && raw.meta) || {};
+  if(raw.error){
     $('#out').innerHTML = `<div class="err">${d.error}</div>
       <p class="muted" style="margin-top:11px">Run:
       <code>python backtest.py --seasons 2020-2026</code></p>`;
@@ -805,7 +807,10 @@ async function viewModel(){
     </tbody></table>
     <p class="note">Walk-forward and out of sample by construction: every rating
       read here was frozen before the match it predicts. Player A is fixed as the
-      lower player id, so row order carries no information about the result.</p>`;
+      lower player id, so row order carries no information about the result.
+      ${bmeta.generated_at ? `<br>Measured on ${(+bmeta.matches||0).toLocaleString()}
+        matches, seasons ${bmeta.seasons}, generated ${bmeta.generated_at}
+        (${bmeta.source}). Score-market metrics are excluded from this run.` : ''}</p>`;
 }
 
 /* ─── boot ────────────────────────────────────────────────────────────────── */

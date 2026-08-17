@@ -217,6 +217,43 @@ railway variables          # inspect/set FETCH_SEASONS
 Do NOT curl the live URL from this laptop to verify — it is unreachable from here
 (same as the NFL engine). Verify on localhost, then deploy and read `railway logs`.
 
+## Archive freshness (engine/refresh.py)
+
+The Sackmann mirror stopped updating at 2026-05-25, so the archive is extended
+forward from a second source:
+
+    ATP  → msolonskyi/ManTennisData (atptour.com scrape), current within days,
+           and with FULLER serve statistics than Sackmann
+    WTA  → NO CURRENT SOURCE. Stays at the Sackmann cutoff.
+
+That asymmetry is real and is surfaced per tour everywhere (`staleness_by_tour`
+in /api/fixtures, a named banner in the Today tab, `refresh --status`). Never
+report a single pooled freshness number — it reads as the ATP's and hides that
+every WTA price is months old.
+
+```bash
+python -m engine.refresh --status      # per-tour freshness
+python -m engine.refresh               # append new results + rebuild
+```
+
+Rules the refresh follows:
+
+- **Append only.** Only matches strictly newer than the archive's last date are
+  taken, so the historical base stays exactly as Sackmann wrote it — the same
+  data every backtest number was measured on.
+- **Qualifying excluded** (Q1/Q2/Q3), matching the Sackmann main-tour files.
+- **Players matched by name** across id spaces; genuinely new players get a
+  synthetic id from 900000 up rather than having their matches dropped.
+- **It refuses to merge** if any fetched row has a null or duplicate `match_id`.
+  That guard exists because ManTennisData's `match_order` column is empty, which
+  made every `match_id` NaN and silently collapsed 2,334 fetched matches into ONE
+  on the first run. `refresh.py` now assigns `match_num` itself.
+
+On Railway: `REFRESH_ON_BOOT=1` and `REFRESH_DAILY=1` at `REFRESH_HOUR` UTC, in a
+daemon thread; `POST /api/refresh` (guarded by `REFRESH_TOKEN`) triggers one
+manually. There is deliberately **no Volume** — the build produces current data and
+a boot refresh self-heals, so a restart can never resurrect a stale seed.
+
 ## Data source
 
 **The original `JeffSackmann/tennis_atp` and `tennis_wta` repos no longer exist** —

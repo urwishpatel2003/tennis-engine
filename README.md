@@ -190,6 +190,28 @@ honest expectation is a well-calibrated price rather than a beatable one — the
 conclusion already on record for the NFL engine in this workspace. Validate against
 results before treating any of it as a signal.
 
+## Staying current
+
+The Sackmann mirror stopped updating in May 2026, so `engine/refresh.py` extends
+the ATP archive from [ManTennisData](https://github.com/msolonskyi/ManTennisData)
+(an atptour.com scrape), which carries fuller serve statistics and is current to
+within a few days. It appends only — the historical base is never restated.
+
+```bash
+python -m engine.refresh --status      # per-tour freshness
+python -m engine.refresh               # append + rebuild
+```
+
+**There is no equivalent WTA source**, so WTA ratings stay at the May cutoff. The
+dashboard names which tour is stale rather than reporting one pooled number.
+
+Why it matters, concretely: on stale ratings the model priced Tabilo v Jodar at
+48.6% against a 31.8% market — a 17-point "edge". After refreshing, it prices the
+same match at 35.8% against 32.9%. The edge was the staleness.
+
+On Railway a refresh runs on boot and daily (`REFRESH_ON_BOOT`, `REFRESH_DAILY`,
+`REFRESH_HOUR`), or on demand via `POST /api/refresh` with `REFRESH_TOKEN`.
+
 ## Deployment
 
 Hosted on Railway, deployed from the CLI:

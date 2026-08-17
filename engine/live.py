@@ -276,11 +276,21 @@ def fixtures(
     idx = {t: NameIndex(eng, t) for t in tours}
 
     # How old are the ratings we are about to price today's tennis with?
-    as_of, stale = None, None
+    #
+    # PER TOUR, not overall. ATP is refreshed from a live source and WTA is not,
+    # so a single pooled figure would report the ATP's freshness and quietly hide
+    # that every WTA price is running on months-old ratings.
+    staleness: dict[str, dict] = {}
     if not eng.ratings.empty and "last_played" in eng.ratings.columns:
-        as_of = pd.to_datetime(eng.ratings["last_played"]).max()
-        if pd.notna(as_of):
-            stale = int((pd.Timestamp.today().normalize() - as_of.normalize()).days)
+        today = pd.Timestamp.today().normalize()
+        for t, grp in eng.ratings.groupby("tour"):
+            mx = pd.to_datetime(grp["last_played"]).max()
+            if pd.notna(mx):
+                staleness[str(t)] = {"as_of": mx.date().isoformat(),
+                                     "stale_days": int((today - mx.normalize()).days)}
+    worst = max((v["stale_days"] for v in staleness.values()), default=None)
+    as_of = min((v["as_of"] for v in staleness.values()), default=None)
+    stale = worst
 
     out, unmatched = [], []
     events_seen = started = 0
@@ -340,6 +350,7 @@ def fixtures(
                 "quality_flags": pred["data_quality"]["flags"],
                 "books": cons["books"],
                 "odds_a": pa, "odds_b": pb,
+                "ratings_stale_days": staleness.get(t["tour"], {}).get("stale_days"),
             }
             if mkt_a == mkt_a:  # not NaN
                 row.update({
@@ -362,8 +373,9 @@ def fixtures(
             "matched": len(out),
             "unmatched": sorted(set(unmatched))[:20],
             "credits_remaining": _cache["meta"]["remaining"],
-            "ratings_as_of": as_of.date().isoformat() if as_of is not None and pd.notna(as_of) else None,
+            "ratings_as_of": as_of,
             "ratings_stale_days": stale,
+            "staleness_by_tour": staleness,
             "market_blended": blend_market,
         },
     }

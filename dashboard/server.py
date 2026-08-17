@@ -17,6 +17,8 @@ GET /api/rankings         power rankings for a (tour, surface)
 GET /api/player           one player's profile: splits, form, rating history
 GET /api/matchup          a full prediction
 GET /api/fixtures         today's matches with live odds (The Odds API)
+GET /api/refresh/status   archive freshness + last refresh result
+POST /api/refresh         trigger a refresh (guarded by REFRESH_TOKEN)
 GET /api/tournaments      events for a (tour, season)
 GET /api/tournament       one draw, with a prediction against every match
 GET /api/tournament/bracket  pre-tournament title odds (lazy: it is expensive)
@@ -29,7 +31,11 @@ drops them so a rebuild can be picked up without a restart.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import threading
+import time as _time
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -42,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from engine.predict import Engine  # noqa: E402
 from engine.schema import PROCESSED, RAW, SURFACES, TOURS  # noqa: E402
 from engine import live  # noqa: E402
+from engine import refresh as refresher  # noqa: E402
 from engine.tournament import TournamentStore  # noqa: E402
 from rankings import build_rankings  # noqa: E402  (repo root, added to sys.path above)
 
@@ -398,6 +405,95 @@ def api_fixtures():
     return jsonify(_clean(d))
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Archive refresh
+# ──────────────────────────────────────────────────────────────────────────────
+# Deliberately NO Railway Volume. The build already fetches current data, and a
+# refresh on boot plus a daily job keeps it current afterwards, so a restart
+# self-heals instead of resurrecting a stale seed. The NFL engine needed a volume
+# because its refresh output could not be reproduced from the image; this one can.
+_refresh_state = {"running": False, "last": None, "error": None, "started": None}
+
+
+def _run_refresh(reason: str) -> dict:
+    """Refresh the archive and rebuild. Never allowed to take the server down."""
+    if _refresh_state["running"]:
+        return {"ok": False, "reason": "a refresh is already running"}
+    _refresh_state.update({"running": True, "error": None,
+                           "started": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    try:
+        print(f"[refresh] starting ({reason})", flush=True)
+        result = refresher.refresh(rebuild=True, verbose=True)
+        result["reason"] = reason
+        _refresh_state["last"] = result
+        clear_caches()
+        print(f"[refresh] done — archive now to {result['after']['last_match']}", flush=True)
+        return {"ok": True, **result}
+    except Exception as e:
+        # A bad upstream response or an OOM must not leave the dashboard dead;
+        # the previously built data is still perfectly serveable.
+        msg = f"{type(e).__name__}: {e}"[:300]
+        _refresh_state["error"] = msg
+        print(f"[refresh] FAILED — {msg}", flush=True)
+        return {"ok": False, "error": msg}
+    finally:
+        _refresh_state["running"] = False
+
+
+def _refresh_loop() -> None:
+    """Daily refresh at REFRESH_HOUR UTC, plus an optional one on boot."""
+    if os.environ.get("REFRESH_ON_BOOT") == "1":
+        _time.sleep(5)          # let gunicorn bind and pass its first healthcheck
+        _run_refresh("boot")
+
+    if os.environ.get("REFRESH_DAILY") != "1":
+        return
+    hour = int(os.environ.get("REFRESH_HOUR", "6"))
+    while True:
+        now = datetime.now(timezone.utc)
+        secs = ((hour - now.hour - 1) % 24) * 3600 + (60 - now.minute) * 60
+        _time.sleep(max(secs, 300))
+        if datetime.now(timezone.utc).hour == hour:
+            _run_refresh("daily")
+
+
+def _start_refresh_thread() -> None:
+    if os.environ.get("REFRESH_DAILY") == "1" or os.environ.get("REFRESH_ON_BOOT") == "1":
+        threading.Thread(target=_refresh_loop, name="refresh", daemon=True).start()
+        print("[refresh] scheduler armed "
+              f"(boot={os.environ.get('REFRESH_ON_BOOT')=='1'}, "
+              f"daily={os.environ.get('REFRESH_DAILY')=='1'} "
+              f"@{os.environ.get('REFRESH_HOUR','6')}:00 UTC)", flush=True)
+
+
+@app.route("/api/refresh/status")
+def api_refresh_status():
+    out = {"archive": refresher.status(), "running": _refresh_state["running"],
+           "started": _refresh_state["started"], "error": _refresh_state["error"],
+           "last": _refresh_state["last"]}
+    p = PROCESSED / "last_refresh.json"
+    if out["last"] is None and p.exists():
+        try:
+            out["last"] = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return jsonify(_clean(out))
+
+
+@app.route("/api/refresh", methods=["POST"])
+def api_refresh():
+    token = os.environ.get("REFRESH_TOKEN")
+    if not token:
+        return jsonify({"error": "REFRESH_TOKEN is not configured on this service"}), 503
+    supplied = request.headers.get("X-Refresh-Token") or request.args.get("token")
+    if supplied != token:
+        return jsonify({"error": "bad or missing token"}), 401
+    if request.args.get("async") == "1":
+        threading.Thread(target=_run_refresh, args=("api",), daemon=True).start()
+        return jsonify({"ok": True, "started": True, "note": "running in background"})
+    return jsonify(_clean(_run_refresh("api")))
+
+
 @app.route("/api/tournaments")
 def api_tournaments():
     """Events for a (tour, season), newest first."""
@@ -449,6 +545,9 @@ def api_backtest():
     if not p.exists():
         return jsonify({"error": "no backtest yet — run python backtest.py"}), 404
     return jsonify(_clean(pd.read_csv(p).to_dict("records")))
+
+
+_start_refresh_thread()
 
 
 if __name__ == "__main__":

@@ -303,14 +303,21 @@ async function viewToday(){
     else if(s==='ev') rows.sort((a,b)=>(b.best_ev??-9)-(a.best_ev??-9));
     else rows.sort((a,b)=>String(a.commence_time||'').localeCompare(String(b.commence_time||'')));
 
-    const stale = m.ratings_stale_days;
-    const staleBox = (stale!=null && stale>21) ? `
+    const byTour = m.staleness_by_tour || {};
+    const staleTours = Object.entries(byTour).filter(([,v]) => v.stale_days > 21);
+    const freshTours = Object.entries(byTour).filter(([,v]) => v.stale_days <= 21);
+    const staleBox = staleTours.length ? `
       <div class="err" style="margin-bottom:12px">
-        <strong>Model prices are degraded.</strong> Ratings come from the results
-        archive, which ends ${m.ratings_as_of} — ${stale} days ago. The odds below are
-        live; the model's are not. Treat large disagreements as a symptom of that gap
-        before treating them as an opinion.
-      </div>` : '';
+        <strong>${staleTours.map(([t])=>t.toUpperCase()).join(' and ')} ratings are stale.</strong>
+        ${staleTours.map(([t,v])=>`${t.toUpperCase()} ends ${v.as_of} (${v.stale_days} days ago)`).join('; ')}.
+        The odds below are live; those model prices are not, so large disagreements on
+        ${staleTours.map(([t])=>t.toUpperCase()).join('/')} matches are a symptom of the gap
+        rather than an opinion.
+        ${freshTours.length?`<br><span style="opacity:.85">${freshTours.map(([t,v])=>
+          `${t.toUpperCase()} is current to ${v.as_of}`).join('; ')}.</span>`:''}
+      </div>` : (freshTours.length ? `
+      <p class="muted" style="margin-bottom:10px">Ratings current to
+        ${freshTours.map(([t,v])=>`${t.toUpperCase()} ${v.as_of}`).join(' · ')}.</p>` : '');
 
     const byEvent = {};
     rows.forEach(r => (byEvent[r.tournament] = byEvent[r.tournament] || []).push(r));
@@ -335,7 +342,9 @@ async function viewToday(){
           const diff = r.disagreement_a==null?null:r.disagreement_a;
           const side = r.best_side ? (r.best_side==='A'?r.player_a:r.player_b) : null;
           const evc = r.best_ev==null?'':(r.best_ev>0?'up':'down');
-          return `<tr>
+          const link = '#/matchup/' + [r.tour, r.player_a, r.player_b, r.surface, r.best_of]
+              .map(encodeURIComponent).join('|');
+          return `<tr class="click" data-go="${link}">
             <td class="l dim">${t}</td>
             <td class="l"><strong>${r.player_a}</strong> v ${r.player_b}</td>
             <td>${pct(r.model_prob_a)}</td>
@@ -346,7 +355,9 @@ async function viewToday(){
             <td class="${evc}">${r.best_ev==null?'—':(r.best_ev>0?'+':'')+(r.best_ev*100).toFixed(1)+'%'}</td>
             <td>${num(r.fair_total_line,1)}</td>
             <td class="l dim">${r.likely_score||''}</td>
-            <td class="l ${r.data_quality==='high'?'':'down'}">${r.data_quality}</td>
+            <td class="l ${r.data_quality==='high'?'':'down'}">${r.data_quality}${
+              r.ratings_stale_days>21?' <span class="down" title="ratings '
+              +r.ratings_stale_days+' days old">·stale</span>':''}</td>
           </tr>`;}).join('')}
         </tbody></table></div>`).join('')}
       <p class="note">Model and market are both stated for the FIRST-named player.
@@ -356,6 +367,13 @@ async function viewToday(){
         in this workspace. Odds are the median across
         ${rows[0] && rows[0].books ? rows[0].books : 'all'} bookmakers, de-vigged.</p>`;
   }
+
+  // Clicking a fixture opens the full matchup for those two players on that
+  // surface and format, rather than making the user retype them.
+  $('#out').addEventListener('click', e => {
+    const tr = e.target.closest('tr[data-go]');
+    if (tr) location.hash = tr.dataset.go;
+  });
 
   $('#reload').onclick = () => load(true);
   $('#tours').onchange = () => load(false);
@@ -504,8 +522,13 @@ async function viewTournaments(arg){
 }
 
 /* ─── MATCHUP ─────────────────────────────────────────────────────────────── */
-async function viewMatchup(){
+async function viewMatchup(arg){
   const st = JSON.parse(localStorage.getItem('mu')||'{}');
+  // #/matchup/tour|A|B|surface|bestOf — set when arriving from a fixture row.
+  if (arg) {
+    const [tr, a, b, sf, bo] = arg.split('|').map(decodeURIComponent);
+    if (a && b) Object.assign(st, {tour: tr, a, b, surface: sf, bo: String(bo || 3)});
+  }
   $('#view').innerHTML = `
    <div class="card">
     <h2>Matchup predictor</h2>

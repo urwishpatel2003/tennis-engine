@@ -118,8 +118,23 @@ NUMERIC_MATCH_COLS = [
     "draw_size", "match_num", "winner_id", "loser_id", "winner_ht", "loser_ht",
     "winner_age", "loser_age", "best_of", "minutes",
     "winner_rank", "winner_rank_points", "loser_rank", "loser_rank_points",
+    # Seeds MUST be coerced. Upstream writes them inconsistently — some seasons
+    # as integers, others as strings — so concatenating years leaves a mixed
+    # object column that pyarrow refuses to write ("Could not convert '5' with
+    # type str: tried to convert to double"). Real data, not the fixtures, found
+    # this one.
+    "winner_seed", "loser_seed",
     *[f"w_{c}" for c in SERVE_STAT_COLS],
     *[f"l_{c}" for c in SERVE_STAT_COLS],
+]
+
+# Free-text columns that must be forced to string for the same reason: entry
+# codes are 'WC'/'Q'/'LL'/'PR'/'SE' but read as NaN-heavy object columns, and a
+# season where every value is blank comes back as float64.
+STRING_MATCH_COLS = [
+    "tourney_id", "tourney_name", "tourney_level", "surface", "round", "score",
+    "winner_entry", "loser_entry", "winner_name", "loser_name",
+    "winner_hand", "loser_hand", "winner_ioc", "loser_ioc",
 ]
 
 
@@ -266,6 +281,9 @@ def normalise_matches(df: pd.DataFrame, tour: str) -> pd.DataFrame:
 
     for col in NUMERIC_MATCH_COLS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    for col in STRING_MATCH_COLS:
+        df[col] = df[col].astype("string")
 
     df["tour"] = tour
     df["surface"] = df["surface"].map(normalise_surface)

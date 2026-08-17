@@ -1,25 +1,25 @@
 {
-  "built_at": "2026-08-17T15:59:29+00:00",
-  "synthetic": true,
-  "source": "synthetic generator",
+  "built_at": "2026-08-17T16:25:39+00:00",
+  "synthetic": false,
+  "source": "Jeff Sackmann tennis_atp / tennis_wta",
   "tours": {
     "atp": {
-      "matches": 14481,
-      "players": 220,
+      "matches": 46964,
+      "players": 1790,
       "seasons": [
-        2018,
+        2010,
         2026
       ],
-      "latest_match": "2026-11-12"
+      "latest_match": "2026-05-25"
     },
     "wta": {
-      "matches": 14481,
-      "players": 220,
+      "matches": 43924,
+      "players": 1735,
       "seasons": [
-        2018,
+        2010,
         2026
       ],
-      "latest_match": "2026-11-12"
+      "latest_match": "2026-05-25"
     }
   },
   "missing_tables": [],

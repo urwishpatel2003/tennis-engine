@@ -7,21 +7,21 @@ model.
 **Live:** [tennis-engine-production.up.railway.app](https://tennis-engine-production.up.railway.app)
 
 ```
-  Holger Falk  vs  Frances Sandberg
+  Carlos Alcaraz  vs  Jannik Sinner
   Roland Garros · Clay · best of 5 · ATP
 ==========================================================================
-  WIN PROBABILITY   Holger Falk:  58.3%   (1.72)
-                    Frances Sandberg:  41.7%   (2.40)
+  WIN PROBABILITY   Carlos Alcaraz:  37.4%   (2.67)
+                    Jannik Sinner:  62.6%   (1.60)
 
-  components        elo 0.558 | serve/return 0.622 | market   —
-  elo blend          1839.2 vs  1793.7   (gap +45.5 → +40.7 adjusted)
-  adjustments       conditions +12.5  head_to_head -17.3
-  head-to-head      2-2 in 4 meetings
+  components        elo 0.416 | serve/return 0.310 | market   —
+  elo blend          1994.9 vs  2076.9   (gap -82.0 → -58.7 adjusted)
+  adjustments       conditions -2.4  head_to_head +25.7
+  head-to-head      10-7 in 17 meetings
 
-  SERVE             hold 81.9% vs 79.5%   (pts on serve 64.4% / 63.0%)
-  SET SCORES        0-3 9%  1-3 15%  2-3 17%  3-0 16%  3-1 22%  3-2 20%
-  GAMES             Holger Falk 21.6 - 20.5 Frances Sandberg   (total 42.1)
-  FAIR LINES        handicap Holger Falk -1.5 games   ·   total 42.5 games
+  SERVE             hold 73.4% vs 77.4%   (pts on serve 59.9% / 61.9%)
+  SET SCORES        0-3 18%  1-3 24%  2-3 21%  3-0 8%  3-1 14%  3-2 16%
+  GAMES             Carlos Alcaraz 19.7 - 21.4 Jannik Sinner   (total 41.0)
+  FAIR LINES        handicap Carlos Alcaraz +2.5 games   ·   total 41.5 games
   DATA QUALITY      high
 ```
 
@@ -31,23 +31,24 @@ model.
 pip install -r requirements.txt
 pip install -r requirements-fetch.txt      # only needed for the data pull
 
-python fetch_data.py --seasons 2000-2026   # needs internet
+python fetch_data.py --seasons 2010-2026   # needs internet
 python run_engine.py --build
 python engine/predict.py --a "Alcaraz" --b "Sinner" --surface Clay --best-of 5
 python dashboard/server.py                 # http://localhost:5000
 ```
 
-If your network blocks GitHub's raw hosts (common on corporate proxies), clone the
-archive on an unrestricted machine and side-load it:
+If every source fails, check whether the upstream still exists before assuming a
+network problem — a deleted repo 404s exactly like a blocked host:
 
 ```bash
-git clone --depth 1 https://github.com/JeffSackmann/tennis_atp
-git clone --depth 1 https://github.com/JeffSackmann/tennis_wta
-python fetch_data.py --from-clone /path/to/parent_of_both_repos
+gh api repos/OWNER/REPO --jq '.full_name, .default_branch'
 ```
 
-To try the engine before any data lands, generate a schema-compatible synthetic
-archive:
+Any mirror can be cloned and side-loaded with
+`python fetch_data.py --from-clone /path/to/parent_of_atp_and_wta`.
+
+To try the engine with no data at all, generate a schema-compatible synthetic
+archive (clearly marked as synthetic everywhere it surfaces):
 
 ```bash
 python tools/make_synthetic_data.py --seasons 2018-2026
@@ -198,9 +199,14 @@ restart loop.
 
 ## Data
 
-Jeff Sackmann's [tennis_atp](https://github.com/JeffSackmann/tennis_atp) and
-[tennis_wta](https://github.com/JeffSackmann/tennis_wta) archives, CC BY-NC-SA.
-Match results back to 1968; serve/return statistics are reliable from roughly 1991.
+Jeff Sackmann's ATP and WTA archives, CC BY-NC-SA. Match results and serve/return
+statistics; the engine is built from 2010 onward by default.
+
+The original `JeffSackmann/tennis_atp` and `tennis_wta` repositories were taken
+down (404 as of August 2026), so `fetch_data.py` reads from
+[Aneeshers/tennis-sackmann-archive](https://github.com/Aneeshers/tennis-sackmann-archive),
+an archival mirror with identical file names and schema. The original URLs are
+still attempted first, so the fetcher switches back automatically if they return.
 
 ## Layout
 

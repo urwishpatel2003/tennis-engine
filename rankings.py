@@ -84,14 +84,30 @@ def recent_form(per_match: pd.DataFrame, days: int = FORM_WINDOW_DAYS) -> pd.Dat
     return agg
 
 
+# A power ranking is a claim about who is good NOW, so anyone who has not played
+# recently is excluded rather than ranked on a stale rating. One tennis year is
+# the natural window: it covers a full surface cycle and tolerates a long injury
+# layoff without letting the retired stay on the list forever.
+ACTIVE_WITHIN_DAYS = 365
+
+
 def build_rankings(
-    tour: str, surface: str = "overall", min_matches: int = 20
+    tour: str, surface: str = "overall", min_matches: int = 20,
+    active_within_days: int | None = ACTIVE_WITHIN_DAYS,
 ) -> pd.DataFrame:
     ratings, sr, players, per_match = load_tables(tour)
 
     overall = ratings[ratings["surface"] == "overall"][
         ["player_id", "elo", "matches", "last_played"]
     ].rename(columns={"elo": "elo_overall", "matches": "matches_overall"})
+
+    if active_within_days is not None and not overall.empty:
+        # Measure recency against the end of the ARCHIVE, not today's date — the
+        # data may be weeks old, and using wall-clock time would silently empty
+        # the rankings as a stale build ages.
+        as_of = pd.to_datetime(overall["last_played"]).max()
+        cutoff = as_of - pd.Timedelta(days=active_within_days)
+        overall = overall[pd.to_datetime(overall["last_played"]) >= cutoff]
 
     if surface == "overall":
         surf = overall.rename(columns={"elo_overall": "elo_surface",
@@ -169,6 +185,9 @@ def main() -> None:
                     choices=["overall", *SURFACES])
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--min-matches", type=int, default=20)
+    ap.add_argument("--active-within-days", type=int, default=ACTIVE_WITHIN_DAYS,
+                    help="exclude players who have not played in this many "
+                         "days; 0 disables the filter (shows all-time ratings)")
     ap.add_argument("--all-surfaces", action="store_true",
                     help="write a CSV for every surface")
     ap.add_argument("--csv", action="store_true", help="also write the CSV")
@@ -176,7 +195,8 @@ def main() -> None:
 
     surfaces = ["overall", *SURFACES] if args.all_surfaces else [args.surface]
     for s in surfaces:
-        df = build_rankings(args.tour, s, args.min_matches)
+        df = build_rankings(args.tour, s, args.min_matches,
+                            args.active_within_days or None)
         if not args.all_surfaces:
             print(f"\n{args.tour.upper()} power rankings — {s}"
                   f"  (min {args.min_matches} matches, n={len(df)})")

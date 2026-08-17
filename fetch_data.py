@@ -42,14 +42,28 @@ from engine.schema import RAW, TOURS, normalise_matches  # noqa: E402
 
 REPO = {"atp": "tennis_atp", "wta": "tennis_wta"}
 
-# Tried in order; the first that returns real CSV wins and is then pinned for the
-# rest of the run (see _preferred_mirror). raw.githubusercontent is the canonical
-# host and normally answers first — the CDNs exist only for networks that block it.
+# Where the data actually lives, tried in order. The first source that returns
+# real CSV is pinned for the rest of the run (see _preferred_mirror).
+#
+# IMPORTANT — the upstream repos are GONE. `JeffSackmann/tennis_atp` and
+# `JeffSackmann/tennis_wta` returned 404 as of 2026-08-17; the account's only
+# remaining public repo is tennis_MatchChartingProject. This was originally
+# misdiagnosed here as a corporate proxy blocking raw.githubusercontent.com,
+# which cost a lot of time — the 404s were simply correct. Verify with
+# `gh api repos/JeffSackmann/tennis_atp` before believing any network theory.
+#
+# The originals are kept first anyway, at no cost: a 404 is not retried, so if
+# Jeff ever restores them they are used again automatically.
+#
+# Templates take {repo} (tennis_atp/tennis_wta), {tour} (atp/wta) and {f} (the
+# bare filename, e.g. atp_matches_2024.csv). Note the archive mirror nests files
+# under an atp/ or wta/ directory and uses `main`, not `master`.
 MIRRORS = (
     "https://raw.githubusercontent.com/JeffSackmann/{repo}/master/{f}",
-    "https://media.githubusercontent.com/media/JeffSackmann/{repo}/master/{f}",
-    "https://cdn.jsdelivr.net/gh/JeffSackmann/{repo}@master/{f}",
-    "https://cdn.statically.io/gh/JeffSackmann/{repo}/master/{f}",
+    "https://raw.githubusercontent.com/Aneeshers/tennis-sackmann-archive/main/{tour}/{f}",
+    "https://cdn.jsdelivr.net/gh/Aneeshers/tennis-sackmann-archive@main/{tour}/{f}",
+    "https://media.githubusercontent.com/media/Aneeshers/tennis-sackmann-archive/main/{tour}/{f}",
+    "https://cdn.statically.io/gh/Aneeshers/tennis-sackmann-archive/main/{tour}/{f}",
 )
 
 HEADERS = {"User-Agent": "tennis-engine/0.1 (+local research)", "Accept": "*/*"}
@@ -103,7 +117,8 @@ def _looks_like_csv(data: bytes | None) -> bool:
     return not (head.startswith(b"<!doctype") or head.startswith(b"<html"))
 
 
-def fetch_csv(repo: str, filename: str, local_clone: Path | None = None) -> bytes | None:
+def fetch_csv(repo: str, tour: str, filename: str,
+              local_clone: Path | None = None) -> bytes | None:
     """Fetch one CSV: local clone first, then the preferred mirror, then the rest."""
     global _preferred_mirror
 
@@ -120,7 +135,7 @@ def fetch_csv(repo: str, filename: str, local_clone: Path | None = None) -> byte
         order.insert(0, _preferred_mirror)
 
     for template in order:
-        data = _get(template.format(repo=repo, f=filename))
+        data = _get(template.format(repo=repo, tour=tour, f=filename))
         if _looks_like_csv(data):
             if _preferred_mirror != template:
                 _preferred_mirror = template
@@ -150,7 +165,7 @@ def fetch_matches(tour: str, seasons: list[int], clone: Path | None) -> pd.DataF
     repo = REPO[tour]
     frames, missing = [], []
     for yr in seasons:
-        data = fetch_csv(repo, f"{tour}_matches_{yr}.csv", clone)
+        data = fetch_csv(repo, tour, f"{tour}_matches_{yr}.csv", clone)
         if data is None:
             missing.append(yr)
             continue
@@ -166,7 +181,7 @@ def fetch_matches(tour: str, seasons: list[int], clone: Path | None) -> pd.DataF
 
 
 def fetch_players(tour: str, clone: Path | None) -> pd.DataFrame:
-    data = fetch_csv(REPO[tour], f"{tour}_players.csv", clone)
+    data = fetch_csv(REPO[tour], tour, f"{tour}_players.csv", clone)
     if data is None:
         return pd.DataFrame()
     df = _read_csv(data, "player_id", PLAYER_COLS)
@@ -218,7 +233,7 @@ def fetch_rankings(tour: str, seasons: list[int], clone: Path | None) -> pd.Data
 
     frames = []
     for name in names:
-        data = fetch_csv(REPO[tour], name, clone)
+        data = fetch_csv(REPO[tour], tour, name, clone)
         if data is None:
             continue
         df = _read_csv(data, "ranking_date", RANKING_COLS)
@@ -312,13 +327,15 @@ def main() -> None:
 
     if not any_ok:
         print(
-            "\nEVERY MIRROR FAILED.\n"
-            "This is usually a corporate proxy blocking raw.githubusercontent.com.\n"
-            "Work around it by cloning the repos on any unrestricted machine:\n"
-            "    git clone --depth 1 https://github.com/JeffSackmann/tennis_atp\n"
-            "    git clone --depth 1 https://github.com/JeffSackmann/tennis_wta\n"
-            "then point the fetcher at them:\n"
-            "    python fetch_data.py --from-clone /path/to/parent_of_both_repos\n",
+            "\nEVERY SOURCE FAILED — no match data was retrieved.\n"
+            "\nCheck whether the SOURCE still exists before blaming the network.\n"
+            "The original JeffSackmann/tennis_atp and tennis_wta repos were taken\n"
+            "down, and a deleted repo 404s exactly like a blocked proxy:\n"
+            "    gh api repos/JeffSackmann/tennis_atp\n"
+            "\nIf the mirrors in MIRRORS have gone too, find a surviving one:\n"
+            "    gh search repos tennis_atp\n"
+            "or clone any mirror and side-load it:\n"
+            "    python fetch_data.py --from-clone /path/to/parent_of_atp_and_wta\n",
             file=sys.stderr,
         )
         sys.exit(1)

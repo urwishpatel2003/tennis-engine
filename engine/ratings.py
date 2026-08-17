@@ -218,22 +218,33 @@ def build_ratings(matches: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     per_match = pd.DataFrame(rows)
 
     # ── Current snapshot ───────────────────────────────────────────────────────
+    # Inactivity regression is applied lazily — `regress_for_inactivity` only runs
+    # when a player turns up in another match. A RETIRED player never does, so
+    # without this their rating stays frozen at career peak forever and they sit
+    # in the current rankings among active players. (Robin Söderling, who last
+    # played in 2011, came out 5th on the ATP list before this was added.)
+    #
+    # So bring every rating forward to the end of the archive before snapshotting.
+    as_of = matches["tourney_date"].max() if len(matches) else pd.Timestamp.today()
+
     snap = []
     tour = matches["tour"].iloc[0] if len(matches) else "atp"
-    for pid, rating in overall.rating.items():
+    for pid in list(overall.rating):
         snap.append(
             {
                 "tour": tour, "player_id": pid, "surface": "overall",
-                "elo": rating, "matches": overall.count.get(pid, 0),
+                "elo": overall.regress_for_inactivity(pid, as_of),
+                "matches": overall.count.get(pid, 0),
                 "last_played": overall.last.get(pid),
             }
         )
     for s, chain in surface_chains.items():
-        for pid, rating in chain.rating.items():
+        for pid in list(chain.rating):
             snap.append(
                 {
                     "tour": tour, "player_id": pid, "surface": s,
-                    "elo": rating, "matches": chain.count.get(pid, 0),
+                    "elo": chain.regress_for_inactivity(pid, as_of),
+                    "matches": chain.count.get(pid, 0),
                     "last_played": chain.last.get(pid),
                 }
             )

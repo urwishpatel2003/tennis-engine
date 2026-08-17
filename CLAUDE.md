@@ -204,10 +204,28 @@ Do NOT curl the live URL from this laptop to verify — it is unreachable from h
 
 ## Data source
 
-Jeff Sackmann's `tennis_atp` / `tennis_wta` GitHub repos (CC BY-NC-SA). `fetch_data.py`
-tries several mirrors because corporate proxies frequently block
-`raw.githubusercontent.com` while allowing `github.com`. If every mirror fails, clone
-the repos on an unrestricted machine and use `--from-clone`.
+**The original `JeffSackmann/tennis_atp` and `tennis_wta` repos no longer exist** —
+they returned 404 as of 2026-08-17, from three independent networks, and the
+account's only remaining public repo is `tennis_MatchChartingProject`. Data now
+comes from `Aneeshers/tennis-sackmann-archive`, an archival mirror carrying the
+identical file names and the identical 49-column match schema, but nested under
+`atp/` and `wta/` directories on branch `main` rather than at the repo root on
+`master`. The original URLs are still tried first at no cost (a 404 is not
+retried), so if Jeff restores them they are picked up automatically.
+
+Data remains CC BY-NC-SA (Jeff Sackmann). See LICENSE.
+
+**Debugging note worth keeping.** Those 404s were first misdiagnosed here as a
+corporate proxy blocking `raw.githubusercontent.com`, which cost hours and sent
+the project down a synthetic-data detour. A deleted repo and a blocked host look
+identical if you only read status codes. Before believing any network theory:
+
+```bash
+gh api repos/OWNER/REPO --jq '.full_name, .default_branch'   # gone, or unreachable?
+gh search repos tennis_atp                                    # find a surviving mirror
+```
+
+and fetch a control URL on the same host that you know exists.
 
 ## Conventions
 

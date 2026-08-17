@@ -16,6 +16,7 @@ GET /api/search           player autocomplete
 GET /api/rankings         power rankings for a (tour, surface)
 GET /api/player           one player's profile: splits, form, rating history
 GET /api/matchup          a full prediction
+GET /api/fixtures         today's matches with live odds (The Odds API)
 GET /api/tournaments      events for a (tour, season)
 GET /api/tournament       one draw, with a prediction against every match
 GET /api/tournament/bracket  pre-tournament title odds (lazy: it is expensive)
@@ -40,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engine.predict import Engine  # noqa: E402
 from engine.schema import PROCESSED, RAW, SURFACES, TOURS  # noqa: E402
+from engine import live  # noqa: E402
 from engine.tournament import TournamentStore  # noqa: E402
 from rankings import build_rankings  # noqa: E402  (repo root, added to sys.path above)
 
@@ -86,6 +88,7 @@ def clear_caches() -> None:
     global _engine, _tstore
     _engine = None
     _tstore = None
+    live.clear()
     _matches.cache_clear()
     _ratings_history.cache_clear()
     build_info.cache_clear()
@@ -362,6 +365,37 @@ def api_matchup():
         margins[ga - gb] = margins.get(ga - gb, 0.0) + prob
     p["game_margin_probs"] = {str(k): v for k, v in sorted(margins.items())}
     return jsonify(_clean(p))
+
+
+@app.route("/api/fixtures")
+def api_fixtures():
+    """
+    Today's and tomorrow's matches with live bookmaker odds, priced by the model.
+
+    Needs ODDS_API_KEY. Answers 200 with `available: false` rather than an error
+    when the key is absent, so the UI can explain the situation instead of showing
+    a failure for what is really just an unconfigured optional feature.
+    """
+    if not live.have_key():
+        return jsonify({
+            "available": False,
+            "reason": "ODDS_API_KEY is not set on this service",
+            "fixtures": [], "meta": {},
+        })
+    if not data_ready():
+        return _no_data()
+
+    tours = tuple(request.args.get("tours", "atp,wta").split(","))
+    include_started = request.args.get("include_started") == "1"
+    if request.args.get("refresh") == "1":
+        live.clear()
+    try:
+        d = live.fixtures(engine(), tours=tours, include_started=include_started)
+    except Exception as e:  # network/quota/provider problems must not 500 the page
+        return jsonify({"available": False, "reason": str(e)[:200],
+                        "fixtures": [], "meta": {}})
+    d["available"] = True
+    return jsonify(_clean(d))
 
 
 @app.route("/api/tournaments")

@@ -92,6 +92,7 @@
 <header>
   <div class="brand">TENNIS <span>ENGINE</span></div>
   <nav>
+    <a href="#/today" data-r="today">Today</a>
     <a href="#/rankings" data-r="rankings">Rankings</a>
     <a href="#/tournaments" data-r="tournaments">Tournaments</a>
     <a href="#/matchup"  data-r="matchup">Matchup</a>
@@ -111,11 +112,12 @@ const surf = s => `<span class="pill ${s}">${s}</span>`;
 let META = {tours:['atp'],surfaces:['overall']};
 
 /* ─── routing ─────────────────────────────────────────────────────────────── */
-const ROUTES = {rankings:viewRankings, tournaments:viewTournaments,
-                matchup:viewMatchup, player:viewPlayer, model:viewModel};
+const ROUTES = {today:viewToday, rankings:viewRankings,
+                tournaments:viewTournaments, matchup:viewMatchup,
+                player:viewPlayer, model:viewModel};
 function route(){
-  const [,name,arg] = (location.hash||'#/rankings').split('/');
-  const r = ROUTES[name] ? name : 'rankings';
+  const [,name,arg] = (location.hash||'#/today').split('/');
+  const r = ROUTES[name] ? name : 'today';
   document.querySelectorAll('nav a').forEach(a=>
     a.classList.toggle('on', a.dataset.r===r));
   ROUTES[r](arg);
@@ -246,6 +248,120 @@ async function viewRankings(){
   load();
 }
 
+
+
+/* ─── TODAY (live fixtures + odds) ────────────────────────────────────────── */
+async function viewToday(){
+  $('#view').innerHTML = `
+   <div class="card">
+    <h2>Today's fixtures <span class="muted" style="font-weight:400">— live odds</span></h2>
+    <div class="row">
+      <div><label>Tours</label><select id="tours">
+        <option value="atp,wta">ATP + WTA</option>
+        <option value="atp">ATP only</option>
+        <option value="wta">WTA only</option></select></div>
+      <div><label>Sort</label><select id="sort">
+        <option value="time">Start time</option>
+        <option value="edge">Biggest disagreement</option>
+        <option value="ev">Best EV</option></select></div>
+      <button id="reload">Refresh odds</button>
+    </div>
+    <div id="out"><p class="muted">Loading fixtures…</p></div>
+   </div>`;
+
+  let DATA = null;
+
+  async function load(force){
+    $('#out').innerHTML = '<p class="muted">Fetching live odds…</p>';
+    const q = {tours: $('#tours').value};
+    if(force) q.refresh = '1';
+    DATA = await api('/api/fixtures', q);
+    render();
+  }
+
+  function render(){
+    const d = DATA;
+    if(!d) return;
+    if(d.available === false){
+      $('#out').innerHTML = `<div class="err">Live odds unavailable — ${d.reason||'unknown'}</div>
+        <p class="muted" style="margin-top:10px">Set <code>ODDS_API_KEY</code> on the service
+        to enable this view.</p>`;
+      return;
+    }
+    if(d.error){ $('#out').innerHTML = `<div class="err">${d.error}</div>`; return; }
+    const m = d.meta || {};
+    const rows = (d.fixtures||[]).slice();
+    if(!rows.length){
+      $('#out').innerHTML = `<p class="muted">No upcoming fixtures posted right now.
+        ${m.already_started?`(${m.already_started} already under way — their prices are
+        in-play, so they are excluded.)`:''}</p>`;
+      return;
+    }
+
+    const s = $('#sort').value;
+    if(s==='edge') rows.sort((a,b)=>Math.abs(b.disagreement_a??0)-Math.abs(a.disagreement_a??0));
+    else if(s==='ev') rows.sort((a,b)=>(b.best_ev??-9)-(a.best_ev??-9));
+    else rows.sort((a,b)=>String(a.commence_time||'').localeCompare(String(b.commence_time||'')));
+
+    const stale = m.ratings_stale_days;
+    const staleBox = (stale!=null && stale>21) ? `
+      <div class="err" style="margin-bottom:12px">
+        <strong>Model prices are degraded.</strong> Ratings come from the results
+        archive, which ends ${m.ratings_as_of} — ${stale} days ago. The odds below are
+        live; the model's are not. Treat large disagreements as a symptom of that gap
+        before treating them as an opinion.
+      </div>` : '';
+
+    const byEvent = {};
+    rows.forEach(r => (byEvent[r.tournament] = byEvent[r.tournament] || []).push(r));
+
+    $('#out').innerHTML = staleBox + `
+      <p class="muted">${rows.length} upcoming ·
+        ${Object.keys(byEvent).length} tournament(s) ·
+        ${m.credits_remaining!=null?`${(+m.credits_remaining).toLocaleString()} API credits left`:''}
+        ${m.already_started?` · ${m.already_started} in play (excluded)`:''}
+        ${m.unmatched && m.unmatched.length?` · <span class="down">${m.unmatched.length}
+          unmatched player(s)</span>`:''}</p>
+      ${Object.entries(byEvent).map(([ev, list]) => `
+        <h3>${ev} <span class="muted" style="font-weight:400;text-transform:none">
+          ${list[0].surface} · best of ${list[0].best_of}</span></h3>
+        <div class="scroll"><table><thead><tr>
+          <th class="l">Start</th><th class="l">Match</th><th>Model</th><th>Market</th>
+          <th>Diff</th><th class="l">Value side</th><th>EV</th><th>Fair total</th>
+          <th class="l">Likely</th><th class="l">Data</th>
+        </tr></thead><tbody>
+        ${list.map(r=>{
+          const t = String(r.commence_time||'').slice(5,16).replace('T',' ');
+          const diff = r.disagreement_a==null?null:r.disagreement_a;
+          const side = r.best_side ? (r.best_side==='A'?r.player_a:r.player_b) : null;
+          const evc = r.best_ev==null?'':(r.best_ev>0?'up':'down');
+          return `<tr>
+            <td class="l dim">${t}</td>
+            <td class="l"><strong>${r.player_a}</strong> v ${r.player_b}</td>
+            <td>${pct(r.model_prob_a)}</td>
+            <td>${r.market_prob_a==null?'—':pct(r.market_prob_a)}</td>
+            <td class="${diff==null?'':(diff>0?'up':'down')}">${
+              diff==null?'—':(diff>0?'+':'')+(diff*100).toFixed(1)}</td>
+            <td class="l">${side||'—'}</td>
+            <td class="${evc}">${r.best_ev==null?'—':(r.best_ev>0?'+':'')+(r.best_ev*100).toFixed(1)+'%'}</td>
+            <td>${num(r.fair_total_line,1)}</td>
+            <td class="l dim">${r.likely_score||''}</td>
+            <td class="l ${r.data_quality==='high'?'':'down'}">${r.data_quality}</td>
+          </tr>`;}).join('')}
+        </tbody></table></div>`).join('')}
+      <p class="note">Model and market are both stated for the FIRST-named player.
+        'Value side' and 'EV' refer to whichever side the model prefers, which may be
+        the other one. Disagreement is not proven edge — tennis match markets are
+        efficient, and the same out-of-sample finding is on record for the NFL engine
+        in this workspace. Odds are the median across
+        ${rows[0] && rows[0].books ? rows[0].books : 'all'} bookmakers, de-vigged.</p>`;
+  }
+
+  $('#reload').onclick = () => load(true);
+  $('#tours').onchange = () => load(false);
+  $('#sort').onchange = render;
+  await load(false);
+}
 
 /* ─── TOURNAMENTS ─────────────────────────────────────────────────────────── */
 async function viewTournaments(arg){

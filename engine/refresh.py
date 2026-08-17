@@ -454,7 +454,8 @@ def _merge(tour: str, new: pd.DataFrame, verbose: bool = True) -> dict:
 
 
 def refresh(rebuild: bool = True, verbose: bool = True,
-            wta_stats: bool = True) -> dict:
+            wta_stats: bool = True, backfill: bool = True,
+            backfill_limit: int = 250) -> dict:
     """
     Append new results for BOTH tours, then rebuild.
 
@@ -492,6 +493,17 @@ def refresh(rebuild: bool = True, verbose: bool = True,
 
     added = sum(t.get("added", 0) for t in result["tours"].values())
     result["added_total"] = added
+
+    # Builds ingest WTA rows without stats, so top up the most recent gap before
+    # rebuilding — otherwise the serve books never see those matches at all.
+    if wta_stats and backfill:
+        try:
+            bf = backfill_wta_stats(limit=backfill_limit, verbose=verbose)
+            result["wta_backfill"] = bf
+            if bf.get("filled"):
+                added += bf["filled"]          # force a rebuild; the books changed
+        except Exception as e:
+            result["wta_backfill"] = {"error": f"{type(e).__name__}: {e}"[:200]}
 
     if rebuild and added:
         from engine import conditions, matchups, ratings, serve_return
@@ -531,10 +543,105 @@ def refresh(rebuild: bool = True, verbose: bool = True,
     return result
 
 
+
+def backfill_wta_stats(limit: int = 250, verbose: bool = True) -> dict:
+    """
+    Fill in serve statistics for WTA rows that were ingested without them.
+
+    The Railway build runs `refresh --no-wta-stats` because one HTTP request per
+    match blows the build deadline. Those rows therefore advance the RATINGS but
+    contribute nothing to the serve/return books, and the forward refresh will
+    never revisit them — it only looks past the archive's last date. This closes
+    that gap, newest first, bounded so a single run cannot go on indefinitely.
+
+    Only `wta_api` rows are candidates. Sackmann rows missing stats are missing
+    them upstream and no amount of fetching will help.
+    """
+    from engine import wta_source
+
+    path = RAW / "matches_wta.parquet"
+    if not path.exists():
+        return {"filled": 0, "remaining": 0, "reason": "no WTA archive"}
+
+    m = pd.read_parquet(path)
+    if "source" not in m.columns:
+        return {"filled": 0, "remaining": 0, "reason": "no source column"}
+
+    missing = m[(m["source"] == "wta_api") & m["w_svpt"].isna()]
+    total_missing = int(len(missing))
+    if total_missing == 0:
+        if verbose:
+            print("  [backfill] every WTA row already has serve stats")
+        return {"filled": 0, "remaining": 0}
+
+    todo = missing.sort_values("tourney_date", ascending=False).head(limit)
+    if verbose:
+        print(f"  [backfill] {total_missing:,} WTA rows without serve stats; "
+              f"attempting {len(todo):,} (newest first)")
+
+    updates: dict = {}
+    rate_limited = False
+    for tid, grp in todo.groupby("tourney_id"):
+        try:
+            year_s, gid_s = str(tid).split("-W")
+            year, gid = int(year_s), int(gid_s)
+        except ValueError:
+            continue
+        wanted = {
+            frozenset((_norm(r.winner_name), _norm(r.loser_name))): r.match_id
+            for r in grp.itertuples(index=False)
+        }
+        try:
+            got = wta_source.stats_for_matches(gid, year, wanted)
+        except wta_source.RateLimited:
+            rate_limited = True
+            if verbose:
+                print("  [backfill] rate limited — stopping and keeping what we have")
+            break
+        except Exception:
+            continue
+        updates.update(got)
+        if verbose and got:
+            print(f"    {grp['tourney_name'].iloc[0]}: {len(got)}/{len(grp)} filled")
+
+    if not updates:
+        return {"filled": 0, "remaining": total_missing, "rate_limited": rate_limited}
+
+    m = m.set_index("match_id")
+    for mid, vals in updates.items():
+        for col, val in vals.items():
+            if col in m.columns:
+                m.loc[mid, col] = val
+    m = m.reset_index()
+
+    # Recompute the derived rates for the rows we touched. engine/schema.py
+    # normally does this at ingest; a backfill writes the raw counts afterwards,
+    # so spw/rpw would otherwise stay NaN and the serve books would still ignore
+    # these matches — the exact problem this function exists to fix.
+    touched = m["match_id"].isin(updates)
+    for me in ("w", "l"):
+        won = m.loc[touched, f"{me}_1stWon"] + m.loc[touched, f"{me}_2ndWon"]
+        svpt = m.loc[touched, f"{me}_svpt"]
+        m.loc[touched, f"{me}_spw"] = np.where(svpt > 0, won / svpt, np.nan)
+    m.loc[touched, "w_rpw"] = 1.0 - m.loc[touched, "l_spw"]
+    m.loc[touched, "l_rpw"] = 1.0 - m.loc[touched, "w_spw"]
+
+    m.to_parquet(path, index=False)
+    remaining = total_missing - len(updates)
+    if verbose:
+        print(f"  [backfill] filled {len(updates):,}; {remaining:,} still missing")
+    return {"filled": int(len(updates)), "remaining": int(remaining),
+            "rate_limited": rate_limited}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Extend the archive with recent results.")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--no-rebuild", action="store_true")
+    ap.add_argument("--no-backfill", action="store_true",
+                    help="skip topping up serve stats for WTA rows ingested "
+                         "without them")
+    ap.add_argument("--backfill-limit", type=int, default=250)
     ap.add_argument("--no-wta-stats", action="store_true",
                     help="skip per-match WTA serve statistics. One request per "
                          "match, so it is minutes for a large catch-up — used by "
@@ -553,7 +660,9 @@ def main() -> None:
         print()
         return
 
-    r = refresh(rebuild=not args.no_rebuild, wta_stats=not args.no_wta_stats)
+    r = refresh(rebuild=not args.no_rebuild, wta_stats=not args.no_wta_stats,
+                backfill=not args.no_backfill,
+                backfill_limit=args.backfill_limit)
     print("\n" + json.dumps(r, indent=2))
 
 

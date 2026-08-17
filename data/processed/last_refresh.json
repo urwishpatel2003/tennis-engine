@@ -16,11 +16,35 @@
       }
     },
     "wta": {
-      "error": "RateLimited: 429 after 4 attempts on /tournaments/?page=0&pageSize=200&from=2026-08-02"
+      "before": {
+        "matches": 44801,
+        "last_match": "2026-08-02"
+      },
+      "after": {
+        "matches": 44898,
+        "last_match": "2026-08-13"
+      },
+      "added": 97,
+      "fetched": {
+        "events_checked": 41,
+        "events_with_results": 2,
+        "new": 97,
+        "with_serve_stats": 97,
+        "players_matched": 194,
+        "players_minted": 0,
+        "date_range": [
+          "2026-08-03",
+          "2026-08-13"
+        ]
+      }
     }
   },
-  "rebuilt": false,
-  "added_total": 0,
+  "rebuilt": true,
+  "added_total": 97,
+  "wta_backfill": {
+    "filled": 0,
+    "remaining": 0
+  },
   "before": {
     "matches": 49298,
     "last_match": "2026-08-13"
@@ -29,5 +53,5 @@
     "matches": 49298,
     "last_match": "2026-08-13"
   },
-  "completed_at": "2026-08-17T19:05:58+00:00"
+  "completed_at": "2026-08-17T21:17:03+00:00"
 }

@@ -289,7 +289,7 @@ def fetch(after: pd.Timestamp, resolver, verbose: bool = True,
                             stats_ok += 1
 
                 rows.append({
-                    "src_id": f"{ev['gid']}-{ev['year']}-{rid}-{n:03d}",
+                    "src_id": f"{ev['gid']}-{ev['year']}-{x.get('MatchID') or f'{rid}-{n:03d}'}",
                     "tourney_id": f"{ev['year']}-W{ev['gid']}",
                     "tourney_name": ev["name"],
                     "surface": ev["surface"],
@@ -321,3 +321,58 @@ def fetch(after: pd.Timestamp, resolver, verbose: bool = True,
     if not rows:
         return pd.DataFrame(), stats
     return pd.DataFrame(rows), stats
+
+
+def stats_for_matches(gid: int, year: int, wanted: dict, verbose: bool = False) -> dict:
+    """
+    Fetch serve statistics for specific matches of one tournament.
+
+    `wanted` maps frozenset({normalised winner, normalised loser}) -> our match_id.
+    Rows ingested by a build carry no MatchID (builds skip the stats pass), so the
+    only way back to the upstream match is the tournament's own match list plus a
+    player-pair lookup. Names inside a single draw are unambiguous, which is what
+    makes this safe.
+
+    Returns {our_match_id: {w_ace: ..., l_svpt: ...}}. Raises RateLimited so the
+    caller can stop cleanly and keep whatever it already has.
+    """
+    out: dict = {}
+    if not wanted:
+        return out
+    try:
+        payload = _get(f"/tournaments/{gid}/{year}/matches")
+    except RateLimited:
+        raise
+    except Exception:
+        return out
+
+    for x in payload.get("matches") or []:
+        if x.get("DrawMatchType") != "S" or x.get("MatchState") != "F":
+            continue
+        mid = x.get("MatchID")
+        if not mid:
+            continue
+        na = _pname(x, "A")
+        nb = _pname(x, "B")
+        if not na or not nb:
+            continue
+        key = frozenset((na, nb))
+        our_id = wanted.get(key)
+        if our_id is None:
+            continue
+        tot = match_stats(gid, year, mid)          # may raise RateLimited
+        if not tot:
+            continue
+        a_won = str(x.get("Winner")) == "2"
+        mapped = stats_for_side(tot, a_won)
+        if np.isfinite(mapped.get("w_svpt", np.nan)) and mapped["w_svpt"] > 0:
+            out[our_id] = mapped
+            if verbose:
+                print(f"      + {na} / {nb}", flush=True)
+    return out
+
+
+def _pname(x: dict, side: str) -> str:
+    from engine.refresh import _norm
+    return _norm(f"{x.get(f'PlayerNameFirst{side}') or ''} "
+                 f"{x.get(f'PlayerNameLast{side}') or ''}".strip())

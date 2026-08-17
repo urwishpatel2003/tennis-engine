@@ -16,6 +16,9 @@ GET /api/search           player autocomplete
 GET /api/rankings         power rankings for a (tour, surface)
 GET /api/player           one player's profile: splits, form, rating history
 GET /api/matchup          a full prediction
+GET /api/tournaments      events for a (tour, season)
+GET /api/tournament       one draw, with a prediction against every match
+GET /api/tournament/bracket  pre-tournament title odds (lazy: it is expensive)
 GET /api/backtest         the most recent backtest results
 
 The Engine object and the heavier frames are cached in-process; `clear_caches()`
@@ -37,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engine.predict import Engine  # noqa: E402
 from engine.schema import PROCESSED, RAW, SURFACES, TOURS  # noqa: E402
+from engine.tournament import TournamentStore  # noqa: E402
 from rankings import build_rankings  # noqa: E402  (repo root, added to sys.path above)
 
 HERE = Path(__file__).resolve().parent
@@ -47,6 +51,7 @@ app = Flask(__name__, static_folder=str(HERE))
 app.json.sort_keys = False
 
 _engine: Engine | None = None
+_tstore: TournamentStore | None = None
 
 
 def engine() -> Engine:
@@ -54,6 +59,14 @@ def engine() -> Engine:
     if _engine is None:
         _engine = Engine()
     return _engine
+
+
+def tstore() -> TournamentStore:
+    """Tournament store, built lazily — it holds the per-match frozen state."""
+    global _tstore
+    if _tstore is None:
+        _tstore = TournamentStore()
+    return _tstore
 
 
 @lru_cache(maxsize=8)
@@ -70,8 +83,9 @@ def _ratings_history() -> pd.DataFrame:
 
 def clear_caches() -> None:
     """Drop every cached frame so a fresh build is picked up without a restart."""
-    global _engine
+    global _engine, _tstore
     _engine = None
+    _tstore = None
     _matches.cache_clear()
     _ratings_history.cache_clear()
     build_info.cache_clear()
@@ -348,6 +362,51 @@ def api_matchup():
         margins[ga - gb] = margins.get(ga - gb, 0.0) + prob
     p["game_margin_probs"] = {str(k): v for k, v in sorted(margins.items())}
     return jsonify(_clean(p))
+
+
+@app.route("/api/tournaments")
+def api_tournaments():
+    """Events for a (tour, season), newest first."""
+    if not data_ready():
+        return _no_data()
+    tour = request.args.get("tour", "atp")
+    season = request.args.get("season")
+    st = tstore()
+    rows = st.list_tournaments(tour, int(season) if season else None)
+    return jsonify(_clean({"seasons": st.seasons(tour), "tournaments": rows}))
+
+
+@app.route("/api/tournament")
+def api_tournament():
+    """One event's full draw with a prediction against every match."""
+    if not data_ready():
+        return _no_data()
+    tour = request.args.get("tour", "atp")
+    tid = request.args.get("tourney_id")
+    if not tid:
+        return jsonify({"error": "tourney_id required"}), 400
+    d = tstore().draw(tour, tid)
+    if "error" in d:
+        return jsonify(d), 404
+    return jsonify(_clean(d))
+
+
+@app.route("/api/tournament/bracket")
+def api_tournament_bracket():
+    """
+    Pre-tournament title odds, simulated forward through the reconstructed draw.
+
+    Separate from /api/tournament because it evaluates every possible pairing in
+    the tree — thousands of matchups for a 128 draw — and the draw itself should
+    not wait on it.
+    """
+    if not data_ready():
+        return _no_data()
+    tour = request.args.get("tour", "atp")
+    tid = request.args.get("tourney_id")
+    if not tid:
+        return jsonify({"error": "tourney_id required"}), 400
+    return jsonify(_clean(tstore().bracket(tour, tid)))
 
 
 @app.route("/api/backtest")

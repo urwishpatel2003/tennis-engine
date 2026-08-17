@@ -49,6 +49,10 @@ python engine/predict.py --a "Carlos Alcaraz" --b "Jannik Sinner" \
 
 # Power rankings
 python rankings.py --tour atp --surface Clay --top 30
+
+# Tournament draws with predictions vs actual results
+python engine/tournament.py --tour atp --season 2025 --list
+python engine/tournament.py --tour atp --tourney-id 2025-540
 python rankings.py --tour wta --all-surfaces          # writes a CSV per surface
 
 # Walk-forward out-of-sample backtest (the honest one)
@@ -81,6 +85,9 @@ python tests/test_pipeline.py
 - `dashboard/` — Flask `server.py` + hash-routed SPA `dashboard.html`.
 - `tools/make_synthetic_data.py` — generates a schema-compatible fake archive.
 - `tools/validate_recovery.py` — checks the engine recovers known latent truth.
+- `engine/tournament.py` — draws, per-match predictions from FROZEN pre-match state,
+  bracket reconstruction and title odds. Shares `predict_from_states` with the live
+  predictor so the two can never drift apart.
 - `fetch_data.py` — the only thing that touches the network.
 
 ## How a prediction is assembled (engine/predict.py)
@@ -148,6 +155,14 @@ the same as the fixed version, because the backtest never sees the term.
   Sorting by it alone does not order matches within an event — sort by
   `["tourney_date", "tourney_id", "match_num"]`, or leave build outputs in the order
   they were emitted.
+- **Bulk prediction needs the cheap paths.** `predict_from_states(...,
+  track_scorelines=False)` skips set-by-set enumeration, and `quick_win_prob` skips
+  reconciliation entirely (~1.5ms vs ~96ms). A bracket simulation evaluates ~8k
+  pairings for a 128 draw; using the full path there is the difference between 12
+  seconds and 13 minutes.
+- **Never build a per-match index with `iterrows()` + `.loc`.** Doing that over the
+  90k-row ratings table cost 54 SECONDS in `TournamentStore.__init__` — more than
+  every prediction it went on to serve. One `join` + `to_dict("index")` is 2.7s.
 - **`best_of` matters a lot for cost.** A best-of-5 `match_distribution` is ~75× a
   best-of-3. Use `markov.match_win_prob` (set-level DP, no game bookkeeping) or
   `markov.match_summary` in any loop; reserve the full distribution for single

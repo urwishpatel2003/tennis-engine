@@ -55,6 +55,33 @@ python tools/make_synthetic_data.py --seasons 2018-2026
 python run_engine.py --build
 ```
 
+## The Tournaments view
+
+Pick a tour, a season and an event, and the dashboard replays the whole draw:
+every match round by round with the model's prediction beside the actual result
+and a hit/miss marker, an accuracy summary for the event, the biggest upsets it
+missed, and — on demand — pre-tournament title odds simulated forward through the
+reconstructed bracket.
+
+Two things make this honest rather than decorative:
+
+- **Predictions use pre-match state.** Each match is priced from the ratings
+  frozen before it was played, so the hit/miss column is a genuine out-of-sample
+  record. Replaying a 2024 draw with today's ratings would be hindsight.
+- **The bracket is reconstructed, not assumed.** A player in a round-k match must
+  have won a round-(k-1) match, which identifies exactly which two earlier matches
+  feed each later one. Title odds then convolve over *every* pairing that could
+  have occurred, using each player's rating as of the start of the event.
+
+Note the archive is **results-only** — tennis draws are made a day or two ahead
+and are not published in it, so there are no forward fixtures. The Tournaments
+view covers completed and in-progress events.
+
+```bash
+python engine/tournament.py --tour atp --season 2025 --list
+python engine/tournament.py --tour atp --tourney-id 2025-540
+```
+
 ## How it works
 
 Two independent views of a match are formed and then reconciled.
@@ -89,21 +116,40 @@ pre-match rating columns that the build steps froze before each match was played
 rather than recomputing anything. Player A is fixed as the lower player id so row
 order carries no information about the result.
 
-On the synthetic reference archive (~19k matches, both players with ≥20 prior matches):
+**Real data, 46,482 matches (2015–2026, both players with ≥20 prior matches):**
 
 | model | log loss | Brier | accuracy |
 |---|---|---|---|
 | coin flip | 0.6931 | 0.2500 | 50.0% |
-| Elo, overall only | 0.6392 | 0.2238 | 63.6% |
-| Elo, surface blend | 0.6408 | 0.2248 | 63.4% |
-| serve/return simulation | 0.6415 | 0.2254 | 62.8% |
-| **blended model** | **0.6359** | **0.2228** | **64.0%** |
+| Elo, overall only | 0.6190 | 0.2155 | 65.1% |
+| Elo, surface blend | 0.6180 | 0.2151 | 65.3% |
+| serve/return simulation | 0.6244 | 0.2172 | 64.8% |
+| **blended model** | **0.6120** | **0.2126** | **65.6%** |
 
-The blend beats every component it is built from, and calibration is tight (largest
-decile gap 2.8pp). Total games MAE 5.77, game margin MAE 4.09.
+The blend beats every component it is built from. The **optimal Elo spread
+multiplier is 0.96 — "well scaled"** — so `ELO_SPREAD_MULT` stays at 1.0. (The
+synthetic archive suggested 0.86; that really was rating warm-up, and reading the
+pooled number would have damped good ratings to fix a transient that does not
+exist in the real data.)
 
-`tools/validate_recovery.py` goes further and asks whether the engine recovers the
-*known* latent skills the generator drew:
+Calibration is good but consistently a shade over-confident — every decile lands
+1–4 points below its predicted rate, largest gap 3.6pp around the coin-flip band.
+
+Per tournament, the same engine replayed over completed draws:
+
+| event | accuracy | log loss |
+|---|---|---|
+| Roland Garros 2025 | 87/119 = 73.1% | 0.5445 |
+| US Open 2025 | 85/120 = 70.8% | 0.5528 |
+| Wimbledon 2025 | 80/122 = 65.6% | 0.5906 |
+
+Grass being the hardest to predict is a real, well-known property of the surface,
+not an artefact — short points and big serving compress the skill gap.
+
+### Recovering known truth
+
+`tools/validate_recovery.py` runs against the synthetic generator, where the
+answer is known, and checks the estimator itself rather than its accuracy:
 
 | quantity | Spearman |
 |---|---|
@@ -111,39 +157,15 @@ decile gap 2.8pp). Total games MAE 5.77, game margin MAE 4.09.
 | serve rating vs true serve talent | +0.80 |
 | return rating vs true return talent | +0.81 |
 
-with clean discriminant separation — the serve book tracks serve talent (+0.80) and
-not return talent (−0.38), so the two skills stay distinct rather than collapsing
-into one strength number.
+with clean discriminant separation — the serve book tracks serve talent (+0.80)
+and not return talent (−0.38), so the two skills stay distinct rather than
+collapsing into one strength number.
 
-**These are synthetic-data numbers.** They demonstrate that the estimator is
-unbiased and the plumbing is sound. They say nothing about accuracy on real tennis
-— re-run both after pulling the real archive.
+### What is NOT validated
 
-Broken down by season, the picture is more interesting than the headline:
-
-| season | log loss | accuracy | Elo spread multiplier |
-|---|---|---|---|
-| 2021 | 0.6599 | 62.1% | 0.67 |
-| 2022 | 0.6477 | 61.9% | 0.80 |
-| 2023 | 0.6366 | 64.1% | 0.84 |
-| 2024 | 0.6345 | 64.0% | 0.86 |
-| 2025 | 0.6221 | 65.7% | 0.98 |
-| 2026 | 0.6204 | 65.7% | 0.98 |
-
-The multiplier climbs from 0.67 to 0.98 as the ratings mature. So the
-over-confidence in the 0.86 headline is a **warm-up artefact, not a property of
-the model** — the archive only starts in 2018, and early seasons are dominated by
-players whose Elo has not converged. On mature ratings the spread is essentially
-correct, which is why `ELO_SPREAD_MULT` in `engine/predict.py` is left at 1.0.
-
-Two caveats before reading too much into any of it:
-
-- These are synthetic numbers. Re-run the backtest on the real archive; if the
-  *late* seasons still show a multiplier well below 1.0 there, that is a genuine
-  signal to lower `K0`, and the early seasons should be ignored either way.
-- The backtest covers the Elo + serve/return blend only. The conditions,
-  head-to-head and height adjustments are applied per-query in `predict.py` and are
-  **not** measured by it — see the "Known gap" section in `CLAUDE.md`.
+The backtest covers the Elo + serve/return blend. The conditions, head-to-head and
+height adjustments are applied per-query in `predict.py` and are **not** measured
+by it — see "Known gap" in `CLAUDE.md`.
 
 ## Tests
 

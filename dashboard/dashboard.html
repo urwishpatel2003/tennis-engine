@@ -93,6 +93,7 @@
   <div class="brand">TENNIS <span>ENGINE</span></div>
   <nav>
     <a href="#/rankings" data-r="rankings">Rankings</a>
+    <a href="#/tournaments" data-r="tournaments">Tournaments</a>
     <a href="#/matchup"  data-r="matchup">Matchup</a>
     <a href="#/player"   data-r="player">Player</a>
     <a href="#/model"    data-r="model">Model</a>
@@ -110,8 +111,8 @@ const surf = s => `<span class="pill ${s}">${s}</span>`;
 let META = {tours:['atp'],surfaces:['overall']};
 
 /* ─── routing ─────────────────────────────────────────────────────────────── */
-const ROUTES = {rankings:viewRankings, matchup:viewMatchup, player:viewPlayer,
-                model:viewModel};
+const ROUTES = {rankings:viewRankings, tournaments:viewTournaments,
+                matchup:viewMatchup, player:viewPlayer, model:viewModel};
 function route(){
   const [,name,arg] = (location.hash||'#/rankings').split('/');
   const r = ROUTES[name] ? name : 'rankings';
@@ -243,6 +244,147 @@ async function viewRankings(){
   };
   $('#go').onclick = load;
   load();
+}
+
+
+/* ─── TOURNAMENTS ─────────────────────────────────────────────────────────── */
+async function viewTournaments(arg){
+  const st = JSON.parse(localStorage.getItem('tn')||'{}');
+  const [tour0, tid0] = (arg||'').split(':');
+  $('#view').innerHTML = `
+   <div class="card">
+    <h2>Tournaments</h2>
+    <div class="row">
+      <div><label>Tour</label><select id="tour">${
+        META.tours.map(t=>`<option ${((tour0||st.tour)===t)?'selected':''}>${t.toUpperCase()}</option>`).join('')}</select></div>
+      <div><label>Season</label><select id="season"></select></div>
+      <div style="flex:1;min-width:180px"><label>Filter</label>
+        <input id="q" placeholder="name contains…" value="${st.q||''}"></div>
+    </div>
+    <p class="muted">Every prediction below was computed from the ratings as they
+      stood <em>before</em> that match was played, so the hit/miss column is a real
+      out-of-sample record, not hindsight.</p>
+    <div id="list" class="scroll"><p class="muted">Loading…</p></div>
+   </div>
+   <div id="draw"></div>`;
+
+  const tourFn = () => $('#tour').value.toLowerCase();
+
+  async function loadSeasons(){
+    const d = await api('/api/tournaments', {tour: tourFn()});
+    const seasons = d.seasons || [];
+    const want = st.season && seasons.includes(+st.season) ? +st.season : seasons[0];
+    $('#season').innerHTML = seasons.map(y=>
+      `<option ${y===want?'selected':''}>${y}</option>`).join('');
+    return loadList();
+  }
+
+  async function loadList(){
+    const tour = tourFn(), season = $('#season').value;
+    localStorage.setItem('tn', JSON.stringify({tour, season, q:$('#q').value}));
+    $('#list').innerHTML = '<p class="muted">Loading…</p>';
+    const d = await api('/api/tournaments', {tour, season});
+    if(d.error){ $('#list').innerHTML = `<div class="err">${d.error}</div>`; return; }
+    const q = $('#q').value.toLowerCase().trim();
+    const rows = (d.tournaments||[]).filter(r=>!q || String(r.name).toLowerCase().includes(q));
+    if(!rows.length){ $('#list').innerHTML='<p class="muted">No events match.</p>'; return; }
+    const LEVEL = {G:'Slam', M:'Masters', F:'Finals', A:'Tour', P:'Premier',
+                   PM:'Prem. Mand.', I:'Intl', D:'Team', C:'Challenger', O:'Olympics'};
+    $('#list').innerHTML = `<table><thead><tr>
+        <th class="l">Date</th><th class="l">Tournament</th><th class="l">Surface</th>
+        <th class="l">Level</th><th>Draw</th><th>Matches</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr class="click" data-id="${r.tourney_id}">
+        <td class="l">${r.date||''}</td>
+        <td class="l"><strong>${r.name}</strong></td>
+        <td class="l">${surf(r.surface)}</td>
+        <td class="l">${LEVEL[r.level]||r.level||''}</td>
+        <td>${r.draw_size||''}</td><td>${r.matches}</td></tr>`).join('')}
+      </tbody></table>`;
+    $('#list').querySelector('table').onclick = e => {
+      const tr = e.target.closest('tr[data-id]');
+      if(tr) loadDraw(tour, tr.dataset.id);
+    };
+  }
+
+  async function loadDraw(tour, tid){
+    $('#draw').innerHTML = '<div class="card"><p class="muted">Building the draw — '
+      + 'every match is being priced from its pre-match ratings…</p></div>';
+    const d = await api('/api/tournament', {tour, tourney_id: tid});
+    if(d.error){ $('#draw').innerHTML=`<div class="card"><div class="err">${d.error}</div></div>`; return; }
+    const s = d.summary;
+    $('#draw').innerHTML = `
+     <div class="card" id="drawcard">
+      <h2>${d.name} ${d.season} <span class="muted" style="font-weight:400">
+        ${d.surface} · best of ${d.best_of}${d.draw_size?` · ${d.draw_size} draw`:''}</span></h2>
+      <div class="grid" style="margin:12px 0">
+        <div class="stat"><div class="k">Model accuracy</div>
+          <div class="v">${s.accuracy==null?'—':pct(s.accuracy)}</div>
+          <div class="s">${s.hits}/${s.scored} matches</div></div>
+        <div class="stat"><div class="k">Log loss</div>
+          <div class="v">${s.logloss==null?'—':num(s.logloss,4)}</div>
+          <div class="s">coin flip = 0.6931</div></div>
+        <div class="stat"><div class="k">Matches</div>
+          <div class="v">${s.matches}</div><div class="s">in the draw</div></div>
+      </div>
+      <div class="row"><button class="primary" id="odds">Show pre-tournament title odds</button></div>
+      <div id="oddsbox"></div>
+      ${s.upsets_missed && s.upsets_missed.length ? `<h3>Biggest upsets the model missed</h3>
+        <table><thead><tr><th class="l">Round</th><th class="l">Result</th>
+          <th class="l">Score</th><th>Model gave winner</th></tr></thead><tbody>
+        ${s.upsets_missed.map(u=>`<tr><td class="l">${u.round}</td>
+          <td class="l">${u.match}</td><td class="l">${u.score}</td>
+          <td class="down">${pct(u.model_prob)}</td></tr>`).join('')}</tbody></table>`:''}
+      ${d.round_order.map(r=>{
+        const ms = d.rounds[r];
+        return `<h3>${ms[0].round_label} <span class="muted" style="font-weight:400;
+          text-transform:none">${ms.filter(x=>x.correct).length}/${
+          ms.filter(x=>'correct' in x).length} correct</span></h3>
+        <table><thead><tr><th></th><th>Model</th><th class="l">Winner</th>
+          <th class="l">Loser</th><th class="l">Score</th><th>Exp. games</th>
+        </tr></thead><tbody>
+        ${ms.map(x=>`<tr>
+          <td class="${x.correct?'up':('correct' in x?'down':'dim')}">${
+            x.correct?'✓':('correct' in x?'✗':'·')}</td>
+          <td>${x.model_prob_winner==null?'—':pct(x.model_prob_winner,0)}</td>
+          <td class="l">${x.winner}</td><td class="l dim">${x.loser}</td>
+          <td class="l">${x.score||''}${x.retirement?' <span class="dim">RET</span>':''}</td>
+          <td>${x.expected_total_games==null?'—':num(x.expected_total_games,1)}</td>
+        </tr>`).join('')}</tbody></table>`;}).join('')}
+     </div>`;
+    location.hash = `#/tournaments/${tour}:${tid}`;
+    $('#odds').onclick = async () => {
+      $('#oddsbox').innerHTML = '<p class="muted">Simulating every possible pairing '
+        + 'in the draw…</p>';
+      const b = await api('/api/tournament/bracket', {tour, tourney_id: tid});
+      if(!b.available){ $('#oddsbox').innerHTML =
+        `<p class="muted">No bracket available (${b.reason||'not a knockout draw'}).</p>`; return; }
+      const mx = Math.max(...b.title_odds.map(t=>t.title_prob));
+      $('#oddsbox').innerHTML = `
+        <h3>Pre-tournament title odds</h3>
+        <p class="muted">Simulated forward from round one using each player's rating
+          as of the start of the event. Actual champion:
+          <strong>${b.actual_champion||'—'}</strong>${b.actual_champion_prob!=null
+            ? ` — the model gave them ${pct(b.actual_champion_prob)}` : ''}.</p>
+        <p class="note">These are more confident than a bookmaker's prices by
+          design: compounding per-match probabilities over six or seven rounds is
+          all this does. A market also prices withdrawal, injury and form collapse,
+          which drag heavy favourites down. Read 70% as "70% if nothing goes wrong".</p>
+        <div class="bars">${b.title_odds.map(t=>`<div>
+          <span class="lab" style="width:150px;text-align:right">${t.name}</span>
+          <span class="track"><span class="fill" style="width:${t.title_prob/mx*100}%;
+            background:${t.name===b.actual_champion?'var(--a)':'var(--accent2)'}"></span></span>
+          <span class="val">${pct(t.title_prob,1)}</span></div>`).join('')}</div>`;
+      $('#odds').disabled = true;
+    };
+    $('#drawcard').scrollIntoView({behavior:'smooth', block:'start'});
+  }
+
+  $('#tour').onchange = loadSeasons;
+  $('#season').onchange = loadList;
+  $('#q').oninput = () => { clearTimeout(window._tq);
+    window._tq = setTimeout(loadList, 250); };
+  await loadSeasons();
+  if(tid0) loadDraw(tour0, tid0);
 }
 
 /* ─── MATCHUP ─────────────────────────────────────────────────────────────── */

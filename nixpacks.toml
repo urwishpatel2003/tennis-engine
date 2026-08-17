@@ -28,7 +28,7 @@ cmds = [
   # results before building. Without this the image ships months behind and every
   # model price on the Today tab is stale on arrival. --no-rebuild because
   # run_engine builds on the next line anyway.
-  "python -u -m engine.refresh --no-rebuild || echo '  (refresh skipped - building on base archive)'",
+  "python -u -m engine.refresh --no-rebuild --no-wta-stats || echo '  (refresh skipped - building on base archive)'",
   "python -u run_engine.py --build",
   "python -u tools/build_report.py",
 ]

@@ -348,25 +348,33 @@ def status() -> dict:
         p = RAW / f"matches_{tour}.parquet"
         if not p.exists():
             continue
-        m = pd.read_parquet(p, columns=["tourney_date", "season"])
+        m = pd.read_parquet(p, columns=["tourney_date", "season", "w_svpt"])
         last = m["tourney_date"].max()
+        recent = m[m["tourney_date"] >= last - pd.Timedelta(days=90)]
         out["tours"][tour] = {
             "matches": int(len(m)),
             "last_match": str(last.date()),
             "stale_days": int((pd.Timestamp.today().normalize() - last.normalize()).days),
             "refreshable": True,
+            # Ratings only need a result; the serve/return model needs a stat
+            # line. Those can diverge — a build that skips per-match stats
+            # advances one and not the other — so coverage is reported, not assumed.
+            "serve_stat_coverage_90d": (round(float(recent["w_svpt"].notna().mean()), 3)
+                                        if len(recent) else None),
         }
     return out
 
 
-def _fetch_new_wta(after: pd.Timestamp, verbose: bool = True) -> tuple[pd.DataFrame, dict]:
+def _fetch_new_wta(after: pd.Timestamp, verbose: bool = True,
+                   with_stats: bool = True) -> tuple[pd.DataFrame, dict]:
     """Completed WTA main-draw singles after `after`, canonicalised."""
     from engine import wta_source
     from engine.schema import ROUND_ORD
 
     players = pd.read_parquet(RAW / "players_wta.parquet")
     resolver = PlayerResolver(players)
-    raw, stats = wta_source.fetch(after, resolver, verbose=verbose)
+    raw, stats = wta_source.fetch(after, resolver, verbose=verbose,
+                                  with_stats=with_stats)
     if raw.empty:
         return pd.DataFrame(), stats
 
@@ -422,8 +430,14 @@ def _merge(tour: str, new: pd.DataFrame, verbose: bool = True) -> dict:
             new[c] = pd.NA
     if "source" not in existing.columns:
         existing["source"] = "sackmann"
+    # Preserve src_id. Without it there is no way to map an archive row back to
+    # the upstream match, which is exactly what a later stats backfill needs —
+    # and builds now ingest WTA matches without stats.
+    if "src_id" in new.columns and "src_id" not in existing.columns:
+        existing["src_id"] = pd.NA
 
-    merged = pd.concat([existing, new[existing.columns]], ignore_index=True)
+    keep = [c for c in existing.columns]
+    merged = pd.concat([existing, new[keep]], ignore_index=True)
     n0 = len(merged)
     merged = merged.drop_duplicates(subset=["match_id"], keep="first")
     merged = merged.sort_values(["tourney_date", "tourney_id", "match_num"]).reset_index(drop=True)
@@ -439,7 +453,8 @@ def _merge(tour: str, new: pd.DataFrame, verbose: bool = True) -> dict:
             "added": int(after["matches"] - before["matches"])}
 
 
-def refresh(rebuild: bool = True, verbose: bool = True) -> dict:
+def refresh(rebuild: bool = True, verbose: bool = True,
+            wta_stats: bool = True) -> dict:
     """
     Append new results for BOTH tours, then rebuild.
 
@@ -449,7 +464,14 @@ def refresh(rebuild: bool = True, verbose: bool = True) -> dict:
     """
     result = {"tours": {}, "rebuilt": False}
 
-    for tour, fetcher in (("atp", fetch_new_atp), ("wta", _fetch_new_wta)):
+    # Per-match WTA stats are ~1 request each with a politeness floor, so a
+    # thousand new matches is minutes of wall clock. That is fine at runtime and
+    # fatal inside a build: it is what pushed the Railway build past its deadline
+    # (twice, and I first blamed the backtest for it). Builds pass wta_stats=False.
+    def _wta(after, verbose=True):
+        return _fetch_new_wta(after, verbose=verbose, with_stats=wta_stats)
+
+    for tour, fetcher in (("atp", fetch_new_atp), ("wta", _wta)):
         path = RAW / f"matches_{tour}.parquet"
         if not path.exists():
             result["tours"][tour] = {"error": "no archive — run fetch_data.py first"}
@@ -513,6 +535,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Extend the archive with recent results.")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--no-rebuild", action="store_true")
+    ap.add_argument("--no-wta-stats", action="store_true",
+                    help="skip per-match WTA serve statistics. One request per "
+                         "match, so it is minutes for a large catch-up — used by "
+                         "the Railway build, which has a deadline.")
     args = ap.parse_args()
 
     if args.status:
@@ -520,12 +546,14 @@ def main() -> None:
         print(f"\nArchive freshness  ({s['checked_at']})")
         for tour, d in s["tours"].items():
             tag = "refreshable" if d["refreshable"] else "NO CURRENT SOURCE"
+            cov = d.get("serve_stat_coverage_90d")
+            cov_s = f"  serve stats {cov*100:.0f}% (last 90d)" if cov is not None else ""
             print(f"  {tour.upper():<5} {d['matches']:>7,} matches  last {d['last_match']}"
-                  f"  ({d['stale_days']} days stale)  [{tag}]")
+                  f"  ({d['stale_days']} days stale)  [{tag}]{cov_s}")
         print()
         return
 
-    r = refresh(rebuild=not args.no_rebuild)
+    r = refresh(rebuild=not args.no_rebuild, wta_stats=not args.no_wta_stats)
     print("\n" + json.dumps(r, indent=2))
 
 

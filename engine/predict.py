@@ -202,8 +202,28 @@ class Engine:
         return {(r["tour"], int(r["player_id"])): r for r in last.to_dict("records")}
 
     # ── resolution ────────────────────────────────────────────────────────────
+    def _match_counts(self) -> dict:
+        """player_id -> career matches on record, for disambiguation."""
+        if self.ratings.empty:
+            return {}
+        return (
+            self.ratings[self.ratings["surface"] == "overall"]
+            .set_index("player_id")["matches"].to_dict()
+        )
+
     def resolve_player(self, who: str | int, tour: str) -> dict | None:
-        """Resolve a player id, exact name, or 'last name' fragment."""
+        """
+        Resolve a player id, exact name, or name fragment.
+
+        Ambiguity is resolved by career match count, and this applies to EXACT
+        name matches too — which is not a nicety, it is a correctness fix.
+        Upstream assigns the same person more than one player_id: Martin
+        Landaluce exists as 211776 (1 match, 2022) and 212021 (28 matches,
+        current), and roughly 1,800 player rows share a name with another row.
+        Returning the first exact hit silently picked the orphaned id, so a
+        perfectly well-known player came back with a near-default rating and a
+        "low data quality" warning. Whichever id carries the real career wins.
+        """
         if self.players.empty:
             return None
         pool = self.players[self.players["tour"] == tour]
@@ -213,26 +233,21 @@ class Engine:
             return hit.iloc[0].to_dict() if len(hit) else None
 
         q = str(who).lower().strip()
-        exact = pool[pool["name_lower"] == q]
-        if len(exact):
-            return exact.iloc[0].to_dict()
+        # Exact matches are strictly preferred over substring matches; only when
+        # there are none do we fall back to a fragment search.
+        candidates = pool[pool["name_lower"] == q]
+        if candidates.empty:
+            candidates = pool[pool["name_lower"].str.contains(q, regex=False, na=False)]
+        if candidates.empty:
+            return None
+        if len(candidates) == 1:
+            return candidates.iloc[0].to_dict()
 
-        contains = pool[pool["name_lower"].str.contains(q, regex=False, na=False)]
-        if len(contains) == 1:
-            return contains.iloc[0].to_dict()
-        if len(contains) > 1:
-            # Prefer the one with the most matches on record — usually the tour
-            # regular rather than a same-named junior.
-            if not self.ratings.empty:
-                counts = (
-                    self.ratings[self.ratings["surface"] == "overall"]
-                    .set_index("player_id")["matches"].to_dict()
-                )
-                contains = contains.assign(
-                    _n=contains["player_id"].map(counts).fillna(0)
-                ).sort_values("_n", ascending=False)
-            return contains.iloc[0].to_dict()
-        return None
+        counts = self._match_counts()
+        candidates = candidates.assign(
+            _n=candidates["player_id"].map(counts).fillna(0)
+        ).sort_values("_n", ascending=False)
+        return candidates.iloc[0].to_dict()
 
     # ── state assembly ────────────────────────────────────────────────────────
     def player_state(
@@ -385,7 +400,7 @@ class Engine:
             sim.get("scorelines", {}).items(), key=lambda kv: -kv[1]
         )[:6]
 
-        quality = _data_quality(a, b)
+        quality = _data_quality(a, b, surface)
 
         return {
             "tour": tour,
@@ -489,20 +504,76 @@ def _fair_handicap_line(games: dict) -> float:
     return best
 
 
-def _data_quality(a: PlayerState, b: PlayerState) -> dict:
-    """Flag how thin the inputs were, so a shaky prediction is visibly shaky."""
-    flags = []
-    for s, tag in ((a, "a"), (b, "b")):
-        if s.matches < 20:
-            flags.append(f"{tag}:few_matches({s.matches})")
-        if s.matches_surface < 5:
-            flags.append(f"{tag}:few_on_surface({s.matches_surface})")
-        if s.svpt_seen < 1000:
-            flags.append(f"{tag}:sparse_serve_stats")
-    return {
-        "flags": flags,
-        "level": "low" if len(flags) >= 3 else ("medium" if flags else "high"),
-    }
+# Career matches needed before a rating is trustworthy. 30 is roughly a full
+# season of main-draw tennis, by which point the decaying K-factor has settled.
+QUALITY_MATCHES_HIGH = 30
+QUALITY_MATCHES_MED = 10
+# Service points needed before the serve/return book means anything. ~70 service
+# points per match, so 2000 is about 30 matches — the same bar, in the other unit.
+QUALITY_SVPT_HIGH = 2000
+
+
+def _player_quality(s: PlayerState, surface: str) -> dict:
+    """
+    How much evidence stands behind ONE player's rating.
+
+    Career matches and service points are deliberately NOT counted as separate
+    problems: they measure the same underlying thing (71% of rated players trip
+    both), and treating them as independent made a single thin player produce
+    three flags. Combined with a "3 flags = low" rule, that meant one unknown
+    qualifier dragged an otherwise well-evidenced matchup to "low" — the label
+    said the prediction was untrustworthy when only one side of it was.
+    """
+    if s.matches >= QUALITY_MATCHES_HIGH and s.svpt_seen >= QUALITY_SVPT_HIGH:
+        level, reason = "high", f"{s.matches} matches on record"
+    elif s.matches >= QUALITY_MATCHES_MED:
+        level, reason = "medium", f"only {s.matches} matches on record"
+    else:
+        level, reason = "low", (
+            f"only {s.matches} match{'' if s.matches == 1 else 'es'} on record"
+        )
+
+    # Surface coverage is a SEPARATE axis and never the player's fault when the
+    # surface itself is defunct: the ATP retired carpet in 2009, so no active
+    # player has carpet history and saying so tells you nothing about them.
+    surface_note = None
+    if surface == "Carpet":
+        surface_note = "carpet was discontinued on tour in 2009 — surface rating falls back to overall"
+    elif s.matches_surface < 5:
+        surface_note = f"only {s.matches_surface} match{'' if s.matches_surface == 1 else 'es'} on {surface}"
+        if level == "high":
+            level = "medium"
+
+    return {"level": level, "reason": reason, "surface_note": surface_note}
+
+
+def _data_quality(a: PlayerState, b: PlayerState, surface: str) -> dict:
+    """
+    Overall confidence in the inputs — the WORSE of the two players.
+
+    A forecast is only as good as the thinner side of it, so this deliberately
+    does not average. It does, however, name which player is the weak link, so
+    "low" is actionable instead of mysterious.
+    """
+    qa = _player_quality(a, surface)
+    qb = _player_quality(b, surface)
+    rank = {"low": 0, "medium": 1, "high": 2}
+    level = min(qa["level"], qb["level"], key=lambda x: rank[x])
+
+    # `flags` are written as plain sentences, not codes. The previous version
+    # emitted things like "b:few_on_surface(1)", which the dashboard printed
+    # verbatim and nobody could act on.
+    flags: list[str] = []
+    for s, q in ((a, qa), (b, qb)):
+        if q["level"] != "high":
+            flags.append(f"{s.name}: {q['reason']}")
+        if q["surface_note"]:
+            # The carpet note describes the surface, not the player — say it once.
+            note = q["surface_note"] if surface == "Carpet" else f"{s.name}: {q['surface_note']}"
+            if note not in flags:
+                flags.append(note)
+
+    return {"level": level, "flags": flags, "players": {"a": qa, "b": qb}}
 
 
 # ──────────────────────────────────────────────────────────────────────────────

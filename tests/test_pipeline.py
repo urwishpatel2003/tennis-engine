@@ -120,7 +120,57 @@ q = eng.predict(A, B, tour="atp", surface="Carpet", best_of=3)
 check("unseen surface still returns a prediction", 0.0 < q["win_prob_a"] < 1.0)
 check("data_quality is reported", q["data_quality"]["level"] in ("low", "medium", "high"))
 
-print("\n7. venue effects move serve, not the winner")
+print("\n7. duplicate player ids resolve to the real career")
+# Upstream assigns the same person more than one player_id (~1,800 player rows
+# share a name). Taking the first exact name match returned the orphaned id, so a
+# well-known player came back with a near-default rating and a "low data quality"
+# warning. Whichever id carries the career must win.
+dupe_names = (
+    eng.players[eng.players["tour"] == "atp"]
+    .groupby("name_lower").filter(lambda g: len(g) > 1)
+)
+if dupe_names.empty:
+    check("duplicate-name players exist to test", True, "(none in this archive)")
+else:
+    counts = eng._match_counts()
+    worse = 0
+    for name, grp in dupe_names.groupby("name_lower"):
+        best_id = int(grp.assign(n=grp["player_id"].map(counts).fillna(0))
+                      .sort_values("n", ascending=False)["player_id"].iloc[0])
+        got = eng.resolve_player(grp["name"].iloc[0], "atp")
+        if got is None or int(got["player_id"]) != best_id:
+            worse += 1
+    check(f"all {dupe_names['name_lower'].nunique()} duplicated names pick the "
+          f"id with the most matches", worse == 0, f"{worse} picked a lesser id")
+
+# And the resolved player must be the one whose stats are reported.
+top_name = top["name"].iloc[0]
+pq = eng.predict(top_name, top["name"].iloc[3], tour="atp")
+check("reported match count matches the resolved id",
+      pq["player_a"]["matches"] == int(
+          eng.ratings[(eng.ratings["tour"] == "atp")
+                      & (eng.ratings["surface"] == "overall")
+                      & (eng.ratings["player_id"] == pq["player_a"]["id"])]["matches"].iloc[0]))
+
+print("\n8. data quality is per-player and names the weak link")
+q_elite = eng.predict(top["name"].iloc[0], top["name"].iloc[1], tour="atp",
+                      surface="Hard")["data_quality"]
+check("two elite players on a live surface are 'high'", q_elite["level"] == "high",
+      f"{q_elite['level']} {q_elite['flags']}")
+q_carpet = eng.predict(top["name"].iloc[0], top["name"].iloc[1], tour="atp",
+                       surface="Carpet")["data_quality"]
+# Carpet was retired from the tour in 2009, so nobody has carpet history. That is
+# a fact about the surface and must not be charged against the players.
+check("carpet does not downgrade two elite players", q_carpet["level"] == "high",
+      f"{q_carpet['level']} {q_carpet['flags']}")
+check("carpet explains itself once",
+      sum("carpet" in f.lower() for f in q_carpet["flags"]) == 1, str(q_carpet["flags"]))
+check("quality flags are readable sentences, not codes",
+      all(":" not in f or " " in f.split(":")[0] or f.split(":")[0].istitle()
+          or " " in f for f in q_elite["flags"] + q_carpet["flags"]),
+      str(q_elite["flags"] + q_carpet["flags"]))
+
+print("\n9. venue effects move serve, not the winner")
 flat = eng.predict(A, B, tour="atp", surface="Hard", best_of=3, altitude=0)
 high = eng.predict(A, B, tour="atp", surface="Hard", best_of=3, altitude=2600)
 check("altitude raises hold probability", high["hold_prob_a"] > flat["hold_prob_a"],

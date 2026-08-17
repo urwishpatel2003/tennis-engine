@@ -195,7 +195,16 @@ def api_search():
         .set_index("player_id")["matches"].to_dict()
         if not eng.ratings.empty else {}
     )
-    hits = hits.assign(n=hits["player_id"].map(counts).fillna(0)).nlargest(12, "n")
+    # Deduplicate by name before truncating. Upstream gives the same person more
+    # than one player_id (~1,800 rows share a name), so without this the dropdown
+    # shows the same player twice and picking the wrong row silently selects an
+    # orphaned id with almost no career history.
+    hits = (
+        hits.assign(n=hits["player_id"].map(counts).fillna(0))
+        .sort_values("n", ascending=False)
+        .drop_duplicates(subset="name_lower", keep="first")
+        .head(12)
+    )
     return jsonify(_clean([
         {"id": int(r.player_id), "name": r.name, "matches": int(r.n), "ioc": r.ioc}
         for r in hits.itertuples(index=False)

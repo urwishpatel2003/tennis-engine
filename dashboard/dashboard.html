@@ -327,7 +327,9 @@ function renderPrediction(p){
        <div class="s">${A.name.split(' ').pop()} sweeps</div></div>
      <div class="stat"><div class="k">Data quality</div>
        <div class="v">${p.data_quality.level}</div>
-       <div class="s">${p.data_quality.flags.length?p.data_quality.flags.join(', '):'full history'}</div></div>
+       <div class="s">${p.data_quality.flags.length
+          ? p.data_quality.flags.join(' · ')
+          : 'both players have full history'}</div></div>
    </div>
 
    <h3>How the number was formed</h3>

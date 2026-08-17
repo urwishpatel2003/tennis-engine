@@ -4,6 +4,8 @@ Match prediction for the ATP and WTA tours: win probability, set scores, game
 handicap and total games, from surface-aware ratings plus a point-level serve/return
 model.
 
+**Live:** [tennis-engine-production.up.railway.app](https://tennis-engine-production.up.railway.app)
+
 ```
   Holger Falk  vs  Frances Sandberg
   Roland Garros · Clay · best of 5 · ATP
@@ -150,6 +152,35 @@ disagreement. Disagreement is not edge. Tennis match markets are efficient, and 
 honest expectation is a well-calibrated price rather than a beatable one — the same
 conclusion already on record for the NFL engine in this workspace. Validate against
 results before treating any of it as a signal.
+
+## Deployment
+
+Hosted on Railway, deployed from the CLI:
+
+```bash
+railway up
+```
+
+The data is **fetched and built during the Railway build**, not committed — the
+machine this was developed on sits behind a proxy that 404s
+`raw.githubusercontent.com`, while the build container has open internet. So
+`nixpacks.toml` runs `fetch_data.py` → `run_engine.py --build` →
+`tools/build_report.py`, and the image ships with real ATP/WTA data.
+
+There is deliberately **no Railway Volume**: nothing on the server mutates data at
+runtime, so there is no state worth persisting, and every redeploy simply
+refreshes the archive. `data/` is in both `.gitignore` and `.railwayignore` so a
+local (possibly synthetic) dataset can never reach the public URL.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FETCH_SEASONS` | `2005-2026` | Season range built into the image. Wider = better-converged Elo, longer build. |
+| `PORT` | set by Railway | gunicorn bind port |
+
+`tools/build_report.py` **fails the build** if no usable data was produced —
+shipping an empty dashboard silently is worse than a failed deploy. `/api/health`
+is the healthcheck and touches no parquet, so a data problem never turns into a
+restart loop.
 
 ## Data
 

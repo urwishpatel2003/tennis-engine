@@ -13,10 +13,15 @@
 # FETCH_SEASONS controls the range (Railway service variable). More history means
 # better-converged Elo and a longer build; 2005-2026 is the sweet spot at roughly
 # 4-6 minutes. Match data exists back to 1968, serve/return stats from ~1991.
+#
+# `python -u` is not optional here. Without it Python block-buffers stdout when
+# stdout is not a TTY, so a 10-minute fetch-and-build emits nothing until it
+# finishes and the Railway build log looks hung — you cannot tell a slow download
+# from a stuck one.
 [phases.build]
 dependsOn = ["install"]
 cmds = [
-  "python fetch_data.py --seasons ${FETCH_SEASONS:-2005-2026}",
-  "python run_engine.py --build",
-  "python tools/build_report.py",
+  "python -u fetch_data.py --seasons ${FETCH_SEASONS:-2005-2026}",
+  "python -u run_engine.py --build",
+  "python -u tools/build_report.py",
 ]

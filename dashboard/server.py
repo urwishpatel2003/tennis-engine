@@ -423,6 +423,12 @@ def _run_refresh(reason: str) -> dict:
                            "started": datetime.now(timezone.utc).isoformat(timespec="seconds")})
     try:
         print(f"[refresh] starting ({reason})", flush=True)
+        # Release the cached frames FIRST. They are the biggest thing resident,
+        # they are about to be invalidated anyway, and holding them through a
+        # rebuild is what got the container OOM-killed on boot.
+        clear_caches()
+        import gc as _gc
+        _gc.collect()
         result = refresher.refresh(rebuild=True, verbose=True)
         result["reason"] = reason
         _refresh_state["last"] = result
@@ -443,7 +449,11 @@ def _run_refresh(reason: str) -> dict:
 def _refresh_loop() -> None:
     """Daily refresh at REFRESH_HOUR UTC, plus an optional one on boot."""
     if os.environ.get("REFRESH_ON_BOOT") == "1":
-        _time.sleep(5)          # let gunicorn bind and pass its first healthcheck
+        # 90s, not 5s. The healthcheck window is 2 minutes and the refresh is the
+        # heaviest thing this process does; starting it while the platform is
+        # still deciding whether the deploy is healthy risks losing the deploy to
+        # a memory spike rather than to anything actually wrong.
+        _time.sleep(90)
         _run_refresh("boot")
 
     if os.environ.get("REFRESH_DAILY") != "1":

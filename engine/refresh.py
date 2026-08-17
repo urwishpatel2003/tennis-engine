@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import io
 import json
 import re
@@ -301,7 +302,16 @@ def fetch_new_atp(after: pd.Timestamp, verbose: bool = True) -> tuple[pd.DataFra
             "loser_rank": np.nan, "loser_rank_points": np.nan,
         })
 
+    # These three lists hold the whole ManTennisData archive as Python dicts and
+    # are the peak memory of a refresh. Drop them before building the frame — a
+    # boot-time refresh runs inside a container that is already holding the
+    # engine's own frames, and the container was OOM-killed with no log line.
+    del rows, tours, src_players
+    gc.collect()
+
     raw = pd.DataFrame(out)
+    del out
+    gc.collect()
 
     # Their `match_order` column is empty for every row, and match_num is what
     # engine.schema builds match_id from. Leaving it null made every match_id NaN,
@@ -465,15 +475,26 @@ def refresh(rebuild: bool = True, verbose: bool = True) -> dict:
         from engine import conditions, matchups, ratings, serve_return
         if verbose:
             print("  [refresh] rebuilding engine ...")
+        # Each stage is written and released before the next begins. Holding all
+        # four in memory at once is what makes this the heaviest thing the server
+        # ever does.
         pm, cur = ratings.build_all(("atp", "wta"))
         pm.to_parquet(PROCESSED / "ratings.parquet", index=False)
         cur.to_parquet(PROCESSED / "ratings_current.parquet", index=False)
+        del pm, cur
+        gc.collect()
+
         pm, cur = serve_return.build_all(("atp", "wta"))
         pm.to_parquet(PROCESSED / "serve_return.parquet", index=False)
         cur.to_parquet(PROCESSED / "serve_return_current.parquet", index=False)
+        del pm, cur
+        gc.collect()
+
         conditions.build_all(("atp", "wta")).to_parquet(
             PROCESSED / "conditions.parquet", index=False)
+        gc.collect()
         matchups.build_all(("atp", "wta")).to_parquet(PROCESSED / "h2h.parquet", index=False)
+        gc.collect()
         result["rebuilt"] = True
     elif rebuild and verbose:
         print("  [refresh] nothing new — skipping rebuild")

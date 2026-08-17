@@ -11,23 +11,29 @@ whole time.
 What it gives and what it does not
 ----------------------------------
 Gives : players, per-set scores with tiebreaks, seeds, rounds, surface, level,
-        draw size, match state — everything Elo needs.
-Lacks : serve statistics (aces, service points won/played). Those matches
-        therefore move the RATINGS but cannot feed the serve/return books.
-        `engine/serve_return.py` already skips rows without a stat line, so this
-        degrades cleanly rather than corrupting the point model.
+        draw size, match state, AND per-match serve statistics — aces, double
+        faults, first serves in and won, service points won, break points.
+        Everything both the ratings and the serve/return books need.
 
 Endpoints used
 --------------
 GET /tennis/tournaments/?page=&pageSize=&from=YYYY-MM-DD   (the `from` filter is
     the one that works — `year=` is silently ignored and returns 1960s events)
 GET /tennis/tournaments/{groupId}/{year}/matches
+GET /tennis/tournaments/{groupId}/{year}/matches/{matchId}/stats
+
+The stats call is one request per match, so it is the slow part of a refresh. It
+is worth it: without it the WTA archive would advance ELO while the serve/return
+books silently stayed frozen at the last date Sackmann supplied stat lines, and
+nothing on screen would say so.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import time
+import urllib.error
 import urllib.request
 
 import numpy as np
@@ -48,13 +54,114 @@ STAT_COLS = ("ace", "df", "svpt", "1stIn", "1stWon", "2ndWon", "SvGms",
              "bpSaved", "bpFaced")
 
 
-def _get(path: str, timeout: int = 60):
-    req = urllib.request.Request(
-        API + path,
-        headers={"User-Agent": "tennis-engine/0.1", "Accept": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)
+class RateLimited(RuntimeError):
+    """The API asked us to slow down. Distinct so callers cannot mistake it for
+    'no data' — see `list_events`."""
+
+
+# Politeness between calls. A full stats backfill is ~900 requests and firing
+# them flat out earned an HTTP 429, after which every subsequent call failed and
+# the refresh silently reported "already up to date".
+_MIN_INTERVAL = 0.12
+_last_call = 0.0
+
+
+def _get(path: str, timeout: int = 60, retries: int = 3):
+    global _last_call
+    for attempt in range(retries + 1):
+        wait = _MIN_INTERVAL - (time.time() - _last_call)
+        if wait > 0:
+            time.sleep(wait)
+        req = urllib.request.Request(
+            API + path,
+            headers={"User-Agent": "tennis-engine/0.1", "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                _last_call = time.time()
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            _last_call = time.time()
+            if e.code == 429 and attempt < retries:
+                time.sleep(2.0 * (2 ** attempt))     # 2s, 4s, 8s
+                continue
+            if e.code == 429:
+                raise RateLimited(f"429 after {retries + 1} attempts on {path}") from e
+            raise
+        except Exception:
+            _last_call = time.time()
+            if attempt < retries:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            raise
+
+
+def match_stats(gid: int, year: int, match_id: str) -> dict | None:
+    """
+    Per-match serve statistics, from /matches/{id}/stats.
+
+    Without these the WTA half of the archive updates ELO but not the
+    serve/return books — the point model would silently stay frozen at whatever
+    date the historical Sackmann stat lines ran out, while the ratings moved on.
+    That is a worse failure than missing data, because nothing on screen would
+    say so.
+
+    Returns the setnum==0 row (match totals) mapped onto our column names, from
+    the WINNER's perspective is NOT possible here — the API is A/B, so the caller
+    supplies which side won.
+    """
+    try:
+        rows = _get(f"/tournaments/{gid}/{year}/matches/{match_id}/stats", timeout=30)
+    except RateLimited:
+        raise                       # let the caller stop cleanly rather than
+                                    # silently write a stats-free archive
+    except Exception:
+        return None
+    if not isinstance(rows, list):
+        return None
+    tot = next((r for r in rows if r.get("setnum") == 0), None)
+    return tot
+
+
+def stats_for_side(tot: dict, a_won: bool) -> dict:
+    """
+    Map one stats row onto our w_*/l_* columns.
+
+    Break points need care: the API reports them from the RETURNER's side
+    (`breakptsconva` = break points player A converted on B's serve), whereas our
+    schema stores them from the SERVER's side (bpFaced/bpSaved). So the winner's
+    break points faced are the loser's break points played, and saved is that
+    minus what the loser converted.
+    """
+    def g(k, default=np.nan):
+        v = tot.get(k)
+        return float(v) if isinstance(v, (int, float)) else default
+
+    w, l = ("a", "b") if a_won else ("b", "a")
+    out = {}
+    for tag, side in (("w", w), ("l", l)):
+        other = "b" if side == "a" else "a"
+        svpt = g(f"totservplayed{side}")
+        first_in = g(f"ptsplayed1stserv{side}")
+        first_won = g(f"ptswon1stserv{side}")
+        serv_won = g(f"ptstotwonserv{side}")
+        bp_played_vs = g(f"breakptsplayed{other}")   # BPs the OPPONENT had
+        bp_conv_vs = g(f"breakptsconv{other}")       # ...and converted
+        out.update({
+            f"{tag}_ace": g(f"aces{side}"),
+            f"{tag}_df": g(f"dblflt{side}"),
+            f"{tag}_svpt": svpt,
+            f"{tag}_1stIn": first_in,
+            f"{tag}_1stWon": first_won,
+            f"{tag}_2ndWon": (serv_won - first_won)
+                             if np.isfinite(serv_won) and np.isfinite(first_won) else np.nan,
+            f"{tag}_SvGms": g(f"servgamesplayed{side}"),
+            f"{tag}_bpFaced": bp_played_vs,
+            f"{tag}_bpSaved": (bp_played_vs - bp_conv_vs)
+                              if np.isfinite(bp_played_vs) and np.isfinite(bp_conv_vs)
+                              else np.nan,
+        })
+    return out
 
 
 def build_score(m: dict, a_won: bool) -> str:
@@ -86,7 +193,14 @@ def list_events(after: pd.Timestamp, max_pages: int = 12) -> list[dict]:
         try:
             j = _get(f"/tournaments/?page={page}&pageSize=200"
                      f"&from={after.date().isoformat()}")
-        except Exception:
+        except RateLimited:
+            # Never degrade this into an empty list. An empty list means "nothing
+            # new to fetch", the caller reports "already up to date", and the
+            # archive quietly stops advancing. A rate limit is not up-to-date.
+            raise
+        except Exception as e:
+            if page == 0:
+                raise RuntimeError(f"WTA tournament list failed: {e}") from e
             break
         content = j.get("content") or []
         if not content:
@@ -109,7 +223,8 @@ def list_events(after: pd.Timestamp, max_pages: int = 12) -> list[dict]:
     return events
 
 
-def fetch(after: pd.Timestamp, resolver, verbose: bool = True) -> tuple[pd.DataFrame, dict]:
+def fetch(after: pd.Timestamp, resolver, verbose: bool = True,
+          with_stats: bool = True) -> tuple[pd.DataFrame, dict]:
     """
     Completed WTA main-draw singles after `after`, in canonical raw shape.
 
@@ -121,10 +236,15 @@ def fetch(after: pd.Timestamp, resolver, verbose: bool = True) -> tuple[pd.DataF
         print(f"  [refresh] WTA: {len(events)} event(s) to check "
               f"(api.wtatennis.com, official)")
 
-    rows, with_results = [], 0
+    rows, with_results, stats_ok = [], 0, 0
     for ev in events:
         try:
             payload = _get(f"/tournaments/{ev['gid']}/{ev['year']}/matches")
+        except RateLimited:
+            if verbose:
+                print(f"  [refresh] WTA: rate limited after {with_results} event(s) — "
+                      f"keeping what was fetched, re-run to continue")
+            break
         except Exception:
             continue
         ms = [x for x in (payload.get("matches") or [])
@@ -154,6 +274,20 @@ def fetch(after: pd.Timestamp, resolver, verbose: bool = True) -> tuple[pd.DataF
                 if not score:
                     continue
 
+                stat_cols = {f"w_{c}": np.nan for c in STAT_COLS}
+                stat_cols.update({f"l_{c}": np.nan for c in STAT_COLS})
+                if with_stats and x.get("MatchID"):
+                    try:
+                        tot = match_stats(ev["gid"], ev["year"], x["MatchID"])
+                    except RateLimited:
+                        with_stats = False      # finish this run without stats
+                        tot = None
+                    if tot:
+                        mapped = stats_for_side(tot, a_won)
+                        if np.isfinite(mapped.get("w_svpt", np.nan)):
+                            stat_cols.update(mapped)
+                            stats_ok += 1
+
                 rows.append({
                     "src_id": f"{ev['gid']}-{ev['year']}-{rid}-{n:03d}",
                     "tourney_id": f"{ev['year']}-W{ev['gid']}",
@@ -177,14 +311,13 @@ def fetch(after: pd.Timestamp, resolver, verbose: bool = True) -> tuple[pd.DataF
                     "best_of": 3,
                     "round": label,
                     "minutes": np.nan,
-                    **{f"w_{c}": np.nan for c in STAT_COLS},
-                    **{f"l_{c}": np.nan for c in STAT_COLS},
+                    **stat_cols,
                     "winner_rank": np.nan, "winner_rank_points": np.nan,
                     "loser_rank": np.nan, "loser_rank_points": np.nan,
                 })
 
     stats = {"events_checked": len(events), "events_with_results": with_results,
-             "new": len(rows), "with_serve_stats": 0}
+             "new": len(rows), "with_serve_stats": stats_ok}
     if not rows:
         return pd.DataFrame(), stats
     return pd.DataFrame(rows), stats

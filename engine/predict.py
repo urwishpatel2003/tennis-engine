@@ -97,6 +97,41 @@ W_MARKET = 0.55
 # would permanently damp mature ratings to compensate for a transient.
 ELO_SPREAD_MULT = 1.0
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Total-games calibration
+# ──────────────────────────────────────────────────────────────────────────────
+# The Markov chain assumes points are i.i.d. given the server. Real matches are
+# not: a player who breaks early often runs away with the set, so real matches end
+# sooner than an i.i.d. model expects. Measured over 34.6k matches (2018-2026) the
+# raw chain over-predicted total games by +1.80 with an MAE of 5.67.
+#
+# `actual ≈ a·predicted + b`, fitted per format on half the data and scored on the
+# other half: MAE 5.67 → 5.28 and bias +1.80 → +0.10. The slope below 1 is the
+# signature of the over-dispersion — long predictions are pulled in harder than
+# short ones.
+#
+# This calibrates the SCORE model only. Win probability is untouched: it is
+# already well calibrated (see the backtest's calibration table).
+TOTAL_GAMES_CALIBRATION = {3: (0.8702, 1.640), 5: (0.8804, 1.427)}
+
+
+def calibrate_total_games(raw: float, best_of: int = 3) -> float:
+    """Map a raw Markov total-games expectation onto the observed scale."""
+    a, b = TOTAL_GAMES_CALIBRATION.get(int(best_of), TOTAL_GAMES_CALIBRATION[3])
+    return a * float(raw) + b
+
+
+def uncalibrate_total_games(line: float, best_of: int = 3) -> float:
+    """
+    Inverse map: which RAW total corresponds to a real-world line?
+
+    Used so probabilities can still be read off the untouched raw distribution —
+    P(actual > L) is evaluated as P(raw > (L - b) / a) rather than by rescaling
+    and re-binning the whole distribution.
+    """
+    a, b = TOTAL_GAMES_CALIBRATION.get(int(best_of), TOTAL_GAMES_CALIBRATION[3])
+    return (float(line) - b) / a
+
 
 def _logit(p: float) -> float:
     p = min(max(float(p), 1e-6), 1.0 - 1e-6)
@@ -473,7 +508,14 @@ def predict_from_states(
 
     # ── Derived market views ──────────────────────────────────────────────
     totals = markov.total_games_distribution(sim["games"])
-    fair_total = _fair_total_line(totals)
+    # The raw chain over-predicts match length (see TOTAL_GAMES_CALIBRATION), so
+    # the headline expectation and the fair line are mapped onto the observed
+    # scale. The distribution itself is left raw; `uncalibrate_total_games`
+    # converts a real-world line back before probabilities are read off it.
+    exp_total_raw = sim["exp_total_games"]
+    exp_total_cal = calibrate_total_games(exp_total_raw, best_of)
+    fair_total = calibrate_total_games(_fair_total_line(totals), best_of)
+    fair_total = round(fair_total * 2) / 2.0          # keep it on a half-point line
     fair_handicap = _fair_handicap_line(sim["games"])
 
     top_scorelines = sorted(
@@ -517,9 +559,12 @@ def predict_from_states(
         "tiebreak_prob_a": sim["tb_a"],
         "set_score_probs": {f"{k[0]}-{k[1]}": v for k, v in sorted(sim["set_scores"].items())},
         "p_straight_sets_a": sim["p_straight"],
+        # Games per player stay raw (their DIFFERENCE is unbiased — the backtest
+        # measured game-margin bias at +0.04); only the total is calibrated.
         "expected_games_a": sim["exp_games_a"],
         "expected_games_b": sim["exp_games_b"],
-        "expected_total_games": sim["exp_total_games"],
+        "expected_total_games": exp_total_cal,
+        "expected_total_games_raw": exp_total_raw,
         "game_margin_a": sim["game_margin"],
         "fair_game_handicap_a": fair_handicap,
         "fair_total_games_line": fair_total,

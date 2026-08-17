@@ -90,6 +90,53 @@ SURFACE_SPW_SHIFT = {
     "Clay": -0.020,
 }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Serve decomposition
+# ──────────────────────────────────────────────────────────────────────────────
+# A single "share of service points won" hides the shape of a player's serve. Two
+# players can win 64% of service points with completely different machinery — one
+# landing 55% of first serves and winning 78% of them, another landing 70% and
+# winning 70% — and they are NOT equally vulnerable to the same returner. A
+# returner who feasts on second serves punishes the first player far more.
+#
+# So the model works in three parts:
+#     spw = first_in x P(win | 1st in) + (1 - first_in) x P(win | 2nd)
+#
+# These baselines are measured from this repo's own 2015+ archive (see the
+# `--baselines` output of engine/serve_return.py), not guessed. They reconstruct
+# the observed aggregate to within 0.001: ATP 0.6415 vs 0.6406 actual,
+# WTA 0.5688 vs 0.5674.
+TOUR_BASE_SPLIT = {
+    "atp": {"first_in": 0.6193, "first_won": 0.7199, "second_won": 0.5141},
+    "wta": {"first_in": 0.6238, "first_won": 0.6361, "second_won": 0.4574},
+}
+
+# Surface deltas, also measured. Note what these say: grass lifts FIRST-serve
+# points won hugely (+0.028 ATP) while barely moving second serve (+0.014), and
+# clay does the reverse. Aggregate spw cannot express that, which is precisely
+# why the split is worth carrying.
+SURFACE_SPLIT_SHIFT = {
+    "atp": {
+        "Clay":   {"first_in": +0.005, "first_won": -0.026, "second_won": -0.002},
+        "Grass":  {"first_in": +0.009, "first_won": +0.028, "second_won": +0.013},
+        "Hard":   {"first_in": -0.004, "first_won": +0.009, "second_won": -0.001},
+        "Carpet": {"first_in": +0.005, "first_won": +0.022, "second_won": +0.010},
+    },
+    "wta": {
+        "Clay":   {"first_in": +0.011, "first_won": -0.020, "second_won": -0.003},
+        "Grass":  {"first_in": +0.004, "first_won": +0.027, "second_won": +0.011},
+        "Hard":   {"first_in": -0.006, "first_won": +0.004, "second_won": -0.000},
+        "Carpet": {"first_in": +0.004, "first_won": +0.020, "second_won": +0.009},
+    },
+}
+
+
+def base_split(tour: str, surface: str) -> dict:
+    """Baseline (first_in, first_won, second_won) for a (tour, surface)."""
+    b = TOUR_BASE_SPLIT.get(tour, TOUR_BASE_SPLIT["atp"])
+    d = SURFACE_SPLIT_SHIFT.get(tour, {}).get(surface, {})
+    return {k: b[k] + d.get(k, 0.0) for k in ("first_in", "first_won", "second_won")}
+
 # Elo scale. 400 is the classic decade; tennis Elo conventionally keeps it.
 ELO_SCALE = 400.0
 ELO_INIT = 1500.0

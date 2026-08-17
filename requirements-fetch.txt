@@ -1,0 +1,11 @@
+# Tennis Engine — DATA-FETCH requirements (LOCAL ONLY)
+# Run: pip install -r requirements-fetch.txt
+#
+# Used only by fetch_data.py, the single script that touches the network.
+# Kept separate so the deployed server never gains a network dependency.
+#
+# Note: unlike the NFL engine's nfl_data_py, there is no version-pin conflict
+# here — Sackmann's archive is plain CSV over HTTPS, so stdlib urllib + pandas
+# do the whole job. `requests` is optional and only smooths proxy handling.
+
+requests>=2.31.0

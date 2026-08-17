@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Data is rebuildable from fetch_data.py — do not commit the archive.
+data/raw/*.parquet
+data/raw/SYNTHETIC.marker
+data/processed/*.parquet
+data/processed/*.csv
+
+.DS_Store
+Thumbs.db

@@ -1,0 +1,15 @@
+# Never upload data from the laptop. The Railway build regenerates it from the
+# real Sackmann archive (see nixpacks.toml) — uploading the local copy would ship
+# whatever happens to be on disk, including the SYNTHETIC dataset used for
+# offline development, which must never reach a public URL.
+data/
+data_seed/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.git/
+.claude/
+tests/
+tools/make_synthetic_data.py

@@ -1,0 +1,228 @@
+"""
+Head-to-head and stylistic matchup effects.
+
+Inputs : data/raw/matches_{tour}.parquet
+Outputs: data/processed/h2h.parquet — every completed meeting, long form, so the
+         predictor and dashboard can both read a pair's history cheaply.
+
+Two distinct things live here:
+
+1. **Head-to-head.** Tennis fans over-weight H2H enormously; the model must not.
+   Most of a 6-2 head-to-head is just "the better player kept winning", which the
+   ratings already know. What is left over — genuine stylistic mismatch — is small
+   and needs heavy shrinkage, so `h2h_elo_delta` measures the record against what
+   the ratings *expected* and keeps only a shrunk fraction of the surprise.
+
+2. **Style interactions.** Handedness and height do not show up in Elo or in the
+   serve/return books, because those are averages over a field that is ~90%
+   right-handed and of average height. A left-hander's advantage is specifically
+   an advantage against right-handers.
+"""
+
+from __future__ import annotations
+
+import argparse
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+# Allow both `python engine/matchups.py` and `python -m engine.matchups`.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from engine.schema import ELO_SCALE, PROCESSED, RAW, TOURS
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tuned constants
+# ──────────────────────────────────────────────────────────────────────────────
+# Head-to-head is damped by three separate things, and each does a distinct job.
+#
+# The problem being solved: a probability gap converts to Elo at ~695 points per
+# unit near even money, and a SMALL head-to-head always shows maximal surprise —
+# a 1-0 record is a 100% win rate against a ~50% expectation regardless of who
+# played. Left alone that produced a +47 Elo swing off a single meeting, swamping
+# a +10 rating gap. That is the "he owns him" trap this module exists to avoid.
+#
+#   H2H_PRIOR         shrinks by sample size: n_eff / (n_eff + prior)
+#   H2H_ELO_PER_PROB  how much of the shrunk surprise we actually believe. The
+#                     full-credit conversion is ~695 Elo per unit of probability;
+#                     200 says roughly 30% of what survives shrinkage is real
+#                     signal and the rest is noise in a small sample.
+#   H2H_MAX_ELO       a backstop for the extreme tail (10-0 and similar)
+#
+# Keeping the strength as its own constant matters: cranking the prior alone to
+# get the magnitude right made the cap bind for every record from 2-0 upward, so
+# a 2-0 and a 10-0 scored identically and the signal went flat. The resulting
+# curve is ~1.6% for 1-0, 3.9% for 3-0, 5.5% for 5-0, capping near 6.5%.
+H2H_PRIOR = 8.0
+H2H_ELO_PER_PROB = 200.0
+H2H_MAX_ELO = 45.0        # hard cap; no pairing is worth more than ~6.5% win prob
+H2H_SURFACE_WEIGHT = 1.6  # meetings on the same surface count for more
+H2H_RECENCY_HALFLIFE_YEARS = 3.0  # a 2014 meeting says little about 2026
+
+# Left-handers win marginally more than their ratings imply against right-handers:
+# the serve swings into the right-hander's backhand in the deuce court and out
+# wide in the ad court, and right-handers see it far less often than the reverse.
+# Measured at ~1.0-1.5% on tour; 12 Elo is the low end of that, deliberately.
+LEFTY_VS_RIGHTY_ELO = 12.0
+
+# Height: tall players serve bigger but return worse. Expressed as a serve/return
+# excess shift per cm away from tour-average height, applied only where it matters
+# (fast surfaces amplify it, clay damps it).
+TOUR_AVG_HEIGHT = {"atp": 185.0, "wta": 173.0}
+HEIGHT_SERVE_PER_CM = 0.00090   # +0.09pt of service points won per cm above average
+HEIGHT_RETURN_PER_CM = -0.00055  # …paid back on return
+SURFACE_HEIGHT_MULT = {"Grass": 1.35, "Carpet": 1.25, "Hard": 1.0, "Clay": 0.65}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Head-to-head table
+# ──────────────────────────────────────────────────────────────────────────────
+def build_h2h(matches: pd.DataFrame) -> pd.DataFrame:
+    """
+    Long-form meeting log: two rows per completed match (one per player).
+
+    Kept as raw meetings rather than pre-aggregated totals so that a prediction
+    can filter to "before date D" — pre-aggregating would leak the future into
+    every backtest.
+    """
+    m = matches[matches["completed"] | matches["retirement"]].copy()
+    frames = []
+    for me, opp, won in (("winner", "loser", True), ("loser", "winner", False)):
+        f = pd.DataFrame(
+            {
+                "tour": m["tour"],
+                "tourney_date": m["tourney_date"],
+                "season": m["season"],
+                "surface": m["surface"],
+                "match_id": m["match_id"],
+                "player_id": m[f"{me}_id"].astype("int64"),
+                "opp_id": m[f"{opp}_id"].astype("int64"),
+                "won": won,
+            }
+        )
+        frames.append(f)
+    out = pd.concat(frames, ignore_index=True)
+    return out.sort_values(["tourney_date", "match_id"]).reset_index(drop=True)
+
+
+def h2h_record(
+    h2h: pd.DataFrame,
+    player_id: int,
+    opp_id: int,
+    before: pd.Timestamp | None = None,
+    surface: str | None = None,
+) -> dict:
+    """
+    Weighted head-to-head record for `player_id` vs `opp_id`.
+
+    `before` MUST be supplied in any backtest context — without it this reads the
+    full history including matches after the one being predicted.
+    """
+    sel = h2h[(h2h["player_id"] == player_id) & (h2h["opp_id"] == opp_id)]
+    if before is not None:
+        sel = sel[sel["tourney_date"] < before]
+    if sel.empty:
+        return {"wins": 0.0, "losses": 0.0, "n": 0, "raw_wins": 0, "raw_losses": 0}
+
+    ref = before if before is not None else sel["tourney_date"].max()
+    years = (ref - sel["tourney_date"]).dt.days / 365.25
+    w = 0.5 ** (years / H2H_RECENCY_HALFLIFE_YEARS)
+    if surface is not None:
+        w = w * np.where(sel["surface"] == surface, H2H_SURFACE_WEIGHT, 1.0)
+
+    won = sel["won"].to_numpy()
+    return {
+        "wins": float(w[won].sum()),
+        "losses": float(w[~won].sum()),
+        "n": int(len(sel)),
+        "raw_wins": int(won.sum()),
+        "raw_losses": int((~won).sum()),
+    }
+
+
+def h2h_elo_delta(record: dict, expected_win_prob: float) -> float:
+    """
+    Elo adjustment from a head-to-head record, measured against expectation.
+
+    The question is never "who won more meetings" but "did they win more than
+    their ratings said they would". A 4-2 record when you were a 70% favourite
+    every time is *under*performance and should move the line the other way.
+    """
+    n_eff = record["wins"] + record["losses"]
+    if n_eff <= 0:
+        return 0.0
+
+    actual = record["wins"] / n_eff
+    surprise = actual - float(expected_win_prob)
+
+    # Shrink by sample size, using the RECENCY-WEIGHTED count rather than the raw
+    # meeting count: five meetings from a decade ago should not carry the weight
+    # of five from last season, and raw n would give them exactly that.
+    shrink = n_eff / (n_eff + H2H_PRIOR)
+    elo = surprise * H2H_ELO_PER_PROB * shrink
+    return float(np.clip(elo, -H2H_MAX_ELO, H2H_MAX_ELO))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Style interactions
+# ──────────────────────────────────────────────────────────────────────────────
+def handedness_elo_delta(hand_a: object, hand_b: object) -> float:
+    """Elo adjustment for A from the handedness matchup (0 if same or unknown)."""
+    a = hand_a if isinstance(hand_a, str) else ""
+    b = hand_b if isinstance(hand_b, str) else ""
+    a, b = a.strip().upper()[:1], b.strip().upper()[:1]
+    if a not in ("L", "R") or b not in ("L", "R") or a == b:
+        return 0.0
+    return LEFTY_VS_RIGHTY_ELO if a == "L" else -LEFTY_VS_RIGHTY_ELO
+
+
+def height_style_delta(
+    height_cm: object, tour: str, surface: str
+) -> tuple[float, float]:
+    """
+    (serve_excess_shift, return_excess_shift) from a player's height.
+
+    Returns (0, 0) when height is unknown — roughly 15% of tour rows, and guessing
+    is worse than abstaining.
+    """
+    if height_cm is None or not np.isfinite(height_cm) or height_cm <= 0:
+        return 0.0, 0.0
+    avg = TOUR_AVG_HEIGHT.get(tour, 180.0)
+    dev = float(height_cm) - avg
+    mult = SURFACE_HEIGHT_MULT.get(surface, 1.0)
+    return HEIGHT_SERVE_PER_CM * dev * mult, HEIGHT_RETURN_PER_CM * dev * mult
+
+
+def build_all(tours: tuple[str, ...] = TOURS) -> pd.DataFrame:
+    out = []
+    for tour in tours:
+        path = RAW / f"matches_{tour}.parquet"
+        if not path.exists():
+            print(f"  [matchups] no {path.name}, skipping {tour}")
+            continue
+        m = pd.read_parquet(path)
+        print(f"  [matchups] {tour}: {len(m):,} matches")
+        out.append(build_h2h(m))
+    if not out:
+        raise FileNotFoundError(
+            f"No match parquets found in {RAW}. Run `python fetch_data.py` first."
+        )
+    return pd.concat(out, ignore_index=True)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Build head-to-head meeting log.")
+    ap.add_argument("--tours", nargs="+", default=list(TOURS))
+    args = ap.parse_args()
+
+    df = build_all(tuple(args.tours))
+    df.to_parquet(PROCESSED / "h2h.parquet", index=False)
+    print(f"  [matchups] wrote {len(df):,} meeting rows")
+
+
+if __name__ == "__main__":
+    main()

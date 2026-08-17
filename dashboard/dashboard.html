@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tennis Engine</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232d; --line:#2a323d;
+    --ink:#e6edf3; --dim:#8b949e; --accent:#4fc3a1; --accent2:#e0a458;
+    --a:#4fc3a1; --b:#e06c75; --clay:#c96f3f; --grass:#4a8f5a; --hard:#3f7fc9;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f8fa; --panel:#fff; --panel2:#eef2f6; --line:#d5dde5;
+           --ink:#111820; --dim:#5b6875; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  header{display:flex;align-items:center;gap:22px;padding:14px 22px;
+         background:var(--panel);border-bottom:1px solid var(--line);
+         position:sticky;top:0;z-index:20;flex-wrap:wrap}
+  .brand{font-weight:700;font-size:16px;letter-spacing:.2px}
+  .brand span{color:var(--accent)}
+  nav a{padding:6px 12px;border-radius:7px;color:var(--dim);font-weight:500}
+  nav a.on{background:var(--panel2);color:var(--ink)}
+  .warn{margin-left:auto;background:#3d2b14;color:var(--accent2);
+        padding:5px 11px;border-radius:6px;font-size:12px;font-weight:600}
+  main{max-width:1180px;margin:0 auto;padding:22px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+        padding:18px;margin-bottom:18px}
+  h2{margin:0 0 14px;font-size:16px;font-weight:650}
+  h3{margin:18px 0 9px;font-size:13px;font-weight:650;color:var(--dim);
+     text-transform:uppercase;letter-spacing:.6px}
+  .row{display:flex;gap:11px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px}
+  label{display:block;font-size:11px;color:var(--dim);margin-bottom:4px;
+        text-transform:uppercase;letter-spacing:.5px}
+  select,input,button{background:var(--panel2);color:var(--ink);
+        border:1px solid var(--line);border-radius:7px;padding:8px 11px;font:inherit}
+  button{cursor:pointer;font-weight:600}
+  button.primary{background:var(--accent);color:#06221a;border-color:transparent}
+  button:hover{filter:brightness(1.12)}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  th,td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+     font-weight:600;cursor:pointer;user-select:none;white-space:nowrap}
+  th:first-child,td:first-child,th.l,td.l{text-align:left}
+  tbody tr:hover{background:var(--panel2)}
+  tbody tr.click{cursor:pointer}
+  .pill{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;
+        font-weight:600}
+  .Clay{background:rgba(201,111,63,.2);color:var(--clay)}
+  .Grass{background:rgba(74,143,90,.2);color:var(--grass)}
+  .Hard{background:rgba(63,127,201,.2);color:var(--hard)}
+  .Carpet{background:rgba(140,120,190,.2);color:#8c78be}
+  .up{color:var(--a)} .down{color:var(--b)} .dim{color:var(--dim)}
+  .bigbar{display:flex;height:38px;border-radius:8px;overflow:hidden;margin:6px 0 4px}
+  .bigbar div{display:flex;align-items:center;justify-content:center;
+              font-weight:700;font-size:14px;color:#08130f}
+  .ba{background:var(--a)} .bb{background:var(--b)}
+  .names{display:flex;justify-content:space-between;font-weight:650;margin-bottom:3px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:11px}
+  .stat{background:var(--panel2);border-radius:9px;padding:11px 13px}
+  .stat .k{font-size:11px;color:var(--dim);text-transform:uppercase;
+           letter-spacing:.5px;margin-bottom:3px}
+  .stat .v{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
+  .stat .s{font-size:11px;color:var(--dim)}
+  .bars div{display:flex;align-items:center;gap:9px;margin:3px 0;font-size:12px}
+  .bars .lab{width:62px;text-align:right;color:var(--dim);
+             font-variant-numeric:tabular-nums}
+  .bars .track{flex:1;height:15px;background:var(--panel2);border-radius:4px;
+               overflow:hidden}
+  .bars .fill{height:100%;border-radius:4px}
+  .bars .val{width:52px;font-variant-numeric:tabular-nums;color:var(--dim)}
+  .ac{position:relative}
+  .acmenu{position:absolute;top:100%;left:0;right:0;background:var(--panel);
+          border:1px solid var(--line);border-radius:8px;margin-top:3px;z-index:30;
+          max-height:250px;overflow:auto;display:none}
+  .acmenu div{padding:8px 11px;cursor:pointer}
+  .acmenu div:hover,.acmenu div.sel{background:var(--panel2)}
+  .muted{color:var(--dim);font-size:12px}
+  .err{background:rgba(224,108,117,.13);border:1px solid rgba(224,108,117,.35);
+       color:var(--b);padding:11px 13px;border-radius:8px}
+  svg{display:block;max-width:100%}
+  .scroll{overflow-x:auto}
+  .note{font-size:12px;color:var(--dim);border-left:3px solid var(--line);
+        padding-left:11px;margin-top:12px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">TENNIS <span>ENGINE</span></div>
+  <nav>
+    <a href="#/rankings" data-r="rankings">Rankings</a>
+    <a href="#/matchup"  data-r="matchup">Matchup</a>
+    <a href="#/player"   data-r="player">Player</a>
+    <a href="#/model"    data-r="model">Model</a>
+  </nav>
+  <div id="warn"></div>
+</header>
+<main id="view"></main>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (p,q={}) => fetch(p+'?'+new URLSearchParams(q)).then(r=>r.json());
+const pct = (v,d=1) => v==null?'—':(v*100).toFixed(d)+'%';
+const num = (v,d=0) => v==null?'—':(+v).toFixed(d);
+const surf = s => `<span class="pill ${s}">${s}</span>`;
+let META = {tours:['atp'],surfaces:['overall']};
+
+/* ─── routing ─────────────────────────────────────────────────────────────── */
+const ROUTES = {rankings:viewRankings, matchup:viewMatchup, player:viewPlayer,
+                model:viewModel};
+function route(){
+  const [,name,arg] = (location.hash||'#/rankings').split('/');
+  const r = ROUTES[name] ? name : 'rankings';
+  document.querySelectorAll('nav a').forEach(a=>
+    a.classList.toggle('on', a.dataset.r===r));
+  ROUTES[r](arg);
+}
+addEventListener('hashchange', route);
+
+/* ─── autocomplete ────────────────────────────────────────────────────────── */
+function autocomplete(input, tourFn, onPick){
+  const menu = document.createElement('div');
+  menu.className = 'acmenu';
+  input.parentNode.appendChild(menu);
+  let items = [], sel = -1, timer;
+
+  const close = () => { menu.style.display='none'; sel=-1; };
+  const render = () => {
+    menu.innerHTML = items.map((it,i)=>
+      `<div class="${i===sel?'sel':''}" data-i="${i}">${it.name}
+       <span class="muted">${it.ioc||''} · ${it.matches} matches</span></div>`).join('');
+    menu.style.display = items.length ? 'block' : 'none';
+  };
+  const pick = i => {
+    if(!items[i]) return;
+    input.value = items[i].name;
+    input.dataset.pid = items[i].id;
+    close();
+    onPick && onPick(items[i]);
+  };
+
+  input.addEventListener('input', ()=>{
+    clearTimeout(timer);
+    input.dataset.pid = '';
+    const q = input.value.trim();
+    if(q.length<2){ items=[]; close(); return; }
+    timer = setTimeout(async ()=>{
+      items = await api('/api/search',{q, tour:tourFn()});
+      sel = -1; render();
+    }, 160);
+  });
+  input.addEventListener('keydown', e=>{
+    if(menu.style.display==='none') return;
+    if(e.key==='ArrowDown'){ sel=Math.min(sel+1,items.length-1); render(); e.preventDefault(); }
+    else if(e.key==='ArrowUp'){ sel=Math.max(sel-1,0); render(); e.preventDefault(); }
+    else if(e.key==='Enter'){ if(sel>=0){ pick(sel); e.preventDefault(); } }
+    else if(e.key==='Escape'){ close(); }
+  });
+  menu.addEventListener('mousedown', e=>{
+    const d = e.target.closest('[data-i]'); if(d) pick(+d.dataset.i);
+  });
+  input.addEventListener('blur', ()=>setTimeout(close,180));
+}
+
+/* ─── sortable table ──────────────────────────────────────────────────────── */
+function sortable(table){
+  table.querySelectorAll('th[data-k]').forEach(th=>{
+    th.onclick = () => {
+      const k = th.dataset.k, body = table.tBodies[0];
+      const dir = th.dataset.dir === 'asc' ? -1 : 1;
+      table.querySelectorAll('th').forEach(x=>x.removeAttribute('data-dir'));
+      th.dataset.dir = dir === 1 ? 'asc' : 'desc';
+      [...body.rows]
+        .sort((x,y)=>{
+          const a=x.dataset[k], b=y.dataset[k];
+          const na=parseFloat(a), nb=parseFloat(b);
+          if(!isNaN(na)&&!isNaN(nb)) return (na-nb)*dir;
+          return String(a).localeCompare(String(b))*dir;
+        })
+        .forEach(r=>body.appendChild(r));
+    };
+  });
+}
+
+/* ─── RANKINGS ────────────────────────────────────────────────────────────── */
+async function viewRankings(){
+  const st = JSON.parse(localStorage.getItem('rk')||'{}');
+  $('#view').innerHTML = `
+   <div class="card">
+    <h2>Power rankings</h2>
+    <div class="row">
+      <div><label>Tour</label><select id="tour">${
+        META.tours.map(t=>`<option ${st.tour===t?'selected':''}>${t.toUpperCase()}</option>`).join('')}</select></div>
+      <div><label>Surface</label><select id="surface">${
+        META.surfaces.map(s=>`<option ${st.surface===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div><label>Min matches</label><input id="mm" type="number" value="${st.mm||20}" style="width:88px"></div>
+      <button class="primary" id="go">Update</button>
+    </div>
+    <p class="muted">Model strength, not the official ATP/WTA list — those are a
+      52-week points tally. Click a row for the player profile.</p>
+    <div id="out" class="scroll"><p class="muted">Loading…</p></div>
+   </div>`;
+
+  const load = async () => {
+    const tour = $('#tour').value.toLowerCase(), surface = $('#surface').value,
+          mm = $('#mm').value;
+    localStorage.setItem('rk', JSON.stringify({tour,surface,mm}));
+    $('#out').innerHTML = '<p class="muted">Loading…</p>';
+    const d = await api('/api/rankings',{tour, surface, min_matches:mm, limit:150});
+    if(d.error || !d.length){ $('#out').innerHTML =
+      `<div class="err">${d.error||'No players met the minimum.'}</div>`; return; }
+    $('#out').innerHTML = `<table id="t">
+      <thead><tr>
+        <th data-k="rank">#</th><th class="l" data-k="name">Player</th>
+        <th data-k="elo">Elo</th><th data-k="selo">Surface</th>
+        <th data-k="hold">Hold%</th><th data-k="brk">Break%</th>
+        <th data-k="form">Form 90d</th><th data-k="trend">Trend</th>
+        <th data-k="m">Matches</th>
+      </tr></thead><tbody>${d.map(r=>`
+        <tr class="click" data-id="${r.player_id}" data-rank="${r.rank}"
+            data-name="${r.name}" data-elo="${r.elo_overall}"
+            data-selo="${r.elo_surface}" data-hold="${r.hold_pct}"
+            data-brk="${r.break_pct}" data-form="${r.form_90d??-1}"
+            data-trend="${r.trend??0}" data-m="${r.matches_overall}">
+          <td>${r.rank}</td>
+          <td class="l">${r.name??r.player_id} <span class="muted">${r.ioc||''}</span></td>
+          <td>${num(r.elo_overall)}</td><td>${num(r.elo_surface)}</td>
+          <td>${pct(r.hold_pct)}</td><td>${pct(r.break_pct)}</td>
+          <td>${pct(r.form_90d,0)}</td>
+          <td class="${r.trend>0?'up':r.trend<0?'down':''}">${
+            r.trend==null?'—':(r.trend>0?'+':'')+num(r.trend)}</td>
+          <td>${r.matches_overall}</td>
+        </tr>`).join('')}</tbody></table>`;
+    sortable($('#t'));
+    $('#t').onclick = e => {
+      const tr = e.target.closest('tr[data-id]');
+      if(tr) location.hash = `#/player/${tour}:${tr.dataset.id}`;
+    };
+  };
+  $('#go').onclick = load;
+  load();
+}
+
+/* ─── MATCHUP ─────────────────────────────────────────────────────────────── */
+async function viewMatchup(){
+  const st = JSON.parse(localStorage.getItem('mu')||'{}');
+  $('#view').innerHTML = `
+   <div class="card">
+    <h2>Matchup predictor</h2>
+    <div class="row">
+      <div style="flex:1;min-width:190px" class="ac">
+        <label>Player A</label><input id="a" placeholder="type a name…" value="${st.a||''}"></div>
+      <div style="flex:1;min-width:190px" class="ac">
+        <label>Player B</label><input id="b" placeholder="type a name…" value="${st.b||''}"></div>
+      <div><label>Tour</label><select id="tour">${
+        META.tours.map(t=>`<option ${st.tour===t?'selected':''}>${t.toUpperCase()}</option>`).join('')}</select></div>
+      <div><label>Surface</label><select id="surface">${
+        META.surfaces.filter(s=>s!=='overall').map(s=>
+          `<option ${st.surface===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div><label>Format</label><select id="bo">
+        <option value="3">Best of 3</option>
+        <option value="5" ${st.bo=='5'?'selected':''}>Best of 5</option></select></div>
+      <div><label>Indoor</label><select id="indoor">
+        <option value="0">No</option><option value="1" ${st.indoor=='1'?'selected':''}>Yes</option></select></div>
+      <button class="primary" id="go">Predict</button>
+    </div>
+    <div id="out"></div>
+   </div>`;
+
+  const tourFn = () => $('#tour').value.toLowerCase();
+  autocomplete($('#a'), tourFn); autocomplete($('#b'), tourFn);
+
+  const run = async () => {
+    const a=$('#a').value.trim(), b=$('#b').value.trim();
+    if(!a||!b){ $('#out').innerHTML='<div class="err">Enter both players.</div>'; return; }
+    const q = {a,b,tour:tourFn(),surface:$('#surface').value,
+               best_of:$('#bo').value,indoor:$('#indoor').value};
+    localStorage.setItem('mu', JSON.stringify({...q, bo:q.best_of}));
+    $('#out').innerHTML='<p class="muted">Simulating…</p>';
+    const p = await api('/api/matchup', q);
+    if(p.error){ $('#out').innerHTML=`<div class="err">${p.error}</div>`; return; }
+    renderPrediction(p);
+  };
+  $('#go').onclick = run;
+  ['a','b'].forEach(id=>$('#'+id).addEventListener('keydown',e=>{
+    if(e.key==='Enter' && !document.querySelector('.acmenu[style*="block"]')) run();
+  }));
+  if(st.a && st.b) run();
+}
+
+function renderPrediction(p){
+  const A=p.player_a, B=p.player_b;
+  const wa=p.win_prob_a, wb=p.win_prob_b;
+  const setKeys = Object.keys(p.set_score_probs);
+  const maxSet = Math.max(...Object.values(p.set_score_probs));
+  const tg = p.total_games_probs, maxTg = Math.max(...Object.values(tg));
+  const adj = p.elo_adjustments||{};
+
+  $('#out').innerHTML = `
+   <div class="names"><span>${A.name}</span><span>${B.name}</span></div>
+   <div class="bigbar">
+     <div class="ba" style="width:${wa*100}%">${pct(wa)}</div>
+     <div class="bb" style="width:${wb*100}%">${pct(wb)}</div>
+   </div>
+   <div class="names muted"><span>fair ${num(p.fair_odds_a,2)}</span>
+     <span>fair ${num(p.fair_odds_b,2)}</span></div>
+
+   <div class="grid" style="margin-top:16px">
+     <div class="stat"><div class="k">Expected games</div>
+       <div class="v">${num(p.expected_games_a,1)} – ${num(p.expected_games_b,1)}</div>
+       <div class="s">total ${num(p.expected_total_games,1)}</div></div>
+     <div class="stat"><div class="k">Fair handicap</div>
+       <div class="v">${p.fair_game_handicap_a>0?'+':''}${num(p.fair_game_handicap_a,1)}</div>
+       <div class="s">games, ${A.name.split(' ').pop()}</div></div>
+     <div class="stat"><div class="k">Fair total</div>
+       <div class="v">${num(p.fair_total_games_line,1)}</div>
+       <div class="s">games</div></div>
+     <div class="stat"><div class="k">Hold %</div>
+       <div class="v">${pct(p.hold_prob_a,0)} / ${pct(p.hold_prob_b,0)}</div>
+       <div class="s">A / B service games</div></div>
+     <div class="stat"><div class="k">Straight sets</div>
+       <div class="v">${pct(p.p_straight_sets_a,0)}</div>
+       <div class="s">${A.name.split(' ').pop()} sweeps</div></div>
+     <div class="stat"><div class="k">Data quality</div>
+       <div class="v">${p.data_quality.level}</div>
+       <div class="s">${p.data_quality.flags.length?p.data_quality.flags.join(', '):'full history'}</div></div>
+   </div>
+
+   <h3>How the number was formed</h3>
+   <table><thead><tr><th class="l">Component</th><th>P(${A.name.split(' ').pop()})</th>
+     <th>Weight</th></tr></thead><tbody>
+     <tr><td class="l">Surface Elo (adjusted)</td><td>${pct(p.components.elo)}</td>
+       <td>${pct(p.components.weights.elo||0,0)}</td></tr>
+     <tr><td class="l">Serve/return simulation</td><td>${pct(p.components.serve_return)}</td>
+       <td>${pct(p.components.weights.serve_return||0,0)}</td></tr>
+     ${p.components.market!=null?`<tr><td class="l">Market</td>
+       <td>${pct(p.components.market)}</td>
+       <td>${pct(p.components.weights.market||0,0)}</td></tr>`:''}
+     <tr style="font-weight:700"><td class="l">Blended</td><td>${pct(wa)}</td><td>—</td></tr>
+   </tbody></table>
+
+   <h3>Rating detail</h3>
+   <table><thead><tr><th class="l"></th><th>${A.name}</th><th>${B.name}</th></tr></thead>
+   <tbody>
+     <tr><td class="l">Elo (overall)</td><td>${num(A.elo)}</td><td>${num(B.elo)}</td></tr>
+     <tr><td class="l">Elo (${p.surface})</td><td>${num(A.elo_surface)}</td>
+       <td>${num(B.elo_surface)}</td></tr>
+     <tr><td class="l">Serve excess</td><td>${pct(A.serve_excess,1)}</td>
+       <td>${pct(B.serve_excess,1)}</td></tr>
+     <tr><td class="l">Return excess</td><td>${pct(A.return_excess,1)}</td>
+       <td>${pct(B.return_excess,1)}</td></tr>
+     <tr><td class="l">Days rest</td><td>${num(A.days_rest)}</td><td>${num(B.days_rest)}</td></tr>
+     <tr><td class="l">Fatigue index</td><td>${num(A.fatigue_index,2)}</td>
+       <td>${num(B.fatigue_index,2)}</td></tr>
+   </tbody></table>
+   ${Object.keys(adj).length?`<p class="muted" style="margin-top:9px">
+     Elo gap ${num(p.elo_gap_raw,1)} → ${num(p.elo_gap_adjusted,1)} after:
+     ${Object.entries(adj).map(([k,v])=>`${k} ${v>0?'+':''}${num(v,1)}`).join(', ')}
+     ${p.h2h.n?` · head-to-head ${p.h2h.raw_wins}-${p.h2h.raw_losses}`:''}</p>`:''}
+
+   <h3>Set score</h3>
+   <div class="bars">${setKeys.map(k=>{
+      const v=p.set_score_probs[k], aWin=+k.split('-')[0] > +k.split('-')[1];
+      return `<div><span class="lab">${k}</span>
+        <span class="track"><span class="fill" style="width:${v/maxSet*100}%;
+          background:${aWin?'var(--a)':'var(--b)'}"></span></span>
+        <span class="val">${pct(v,0)}</span></div>`;}).join('')}</div>
+
+   <h3>Total games</h3>
+   <div class="bars">${Object.entries(tg).filter(([,v])=>v>0.008).map(([k,v])=>
+     `<div><span class="lab">${k}</span>
+      <span class="track"><span class="fill" style="width:${v/maxTg*100}%;
+        background:var(--accent2)"></span></span>
+      <span class="val">${pct(v,1)}</span></div>`).join('')}</div>
+
+   <h3>Game margin <span class="muted" style="font-weight:400;text-transform:none">
+     — ${A.name.split(' ').pop()} games minus ${B.name.split(' ').pop()} games</span></h3>
+   <div class="bars">${(()=>{const gm=p.game_margin_probs||{};
+     const es=Object.entries(gm).filter(([,v])=>v>0.008);
+     const mx=Math.max(...es.map(([,v])=>v),1e-9);
+     return es.map(([k,v])=>`<div><span class="lab">${+k>0?'+':''}${k}</span>
+       <span class="track"><span class="fill" style="width:${v/mx*100}%;
+         background:${+k>0?'var(--a)':+k<0?'var(--b)':'var(--dim)'}"></span></span>
+       <span class="val">${pct(v,1)}</span></div>`).join('');})()}</div>
+
+   <h3>Most likely scorelines</h3>
+   <table><thead><tr><th class="l">Score</th><th>Probability</th></tr></thead><tbody>
+     ${p.likely_scorelines.map(s=>`<tr><td class="l">${s.score}</td>
+       <td>${pct(s.prob,1)}</td></tr>`).join('')}
+   </tbody></table>
+   <p class="note">Score markets are reconciled to the headline win probability:
+     the point-level serve rates are shifted symmetrically until the Markov chain
+     reproduces ${pct(wa)} exactly, so the games line and the win probability can
+     never disagree.</p>`;
+}
+
+/* ─── PLAYER ──────────────────────────────────────────────────────────────── */
+async function viewPlayer(arg){
+  const [tour0,id0] = (arg||'').split(':');
+  $('#view').innerHTML = `
+   <div class="card">
+    <h2>Player profile</h2>
+    <div class="row">
+      <div style="flex:1;min-width:230px" class="ac">
+        <label>Player</label><input id="p" placeholder="type a name…"></div>
+      <div><label>Tour</label><select id="tour">${
+        META.tours.map(t=>`<option ${t===tour0?'selected':''}>${t.toUpperCase()}</option>`).join('')}</select></div>
+    </div>
+    <div id="out"><p class="muted">Search for a player, or click one in the rankings.</p></div>
+   </div>`;
+  autocomplete($('#p'), ()=>$('#tour').value.toLowerCase(),
+    it => load(it.id));
+
+  async function load(id){
+    $('#out').innerHTML='<p class="muted">Loading…</p>';
+    const d = await api('/api/player',{tour:$('#tour').value.toLowerCase(), id});
+    if(d.error){ $('#out').innerHTML=`<div class="err">${d.error}</div>`; return; }
+    $('#p').value = d.name;
+    const ov = d.splits.find(s=>s.surface==='overall')||{};
+    $('#out').innerHTML = `
+      <h2 style="margin-bottom:2px">${d.name}
+        <span class="muted" style="font-weight:400">${d.ioc||''}
+        ${d.hand?'· '+(d.hand==='L'?'left-handed':'right-handed'):''}
+        ${d.height?'· '+num(d.height)+'cm':''}</span></h2>
+      <div class="grid" style="margin:14px 0">
+        <div class="stat"><div class="k">Elo</div><div class="v">${num(ov.elo)}</div>
+          <div class="s">${ov.matches||0} matches</div></div>
+        ${d.record_by_surface.map(r=>`<div class="stat">
+          <div class="k">${r.surface}</div><div class="v">${pct(r.win_pct,0)}</div>
+          <div class="s">${r.wins}-${r.losses}</div></div>`).join('')}
+      </div>
+      <h3>Rating history</h3>${sparkline(d.curve)}
+      <h3>Surface splits</h3>
+      <table><thead><tr><th class="l">Surface</th><th>Elo</th><th>Matches</th>
+        <th>Serve excess</th><th>Return excess</th></tr></thead><tbody>
+        ${d.splits.map(s=>`<tr><td class="l">${s.surface==='overall'?'Overall':surf(s.surface)}</td>
+          <td>${num(s.elo)}</td><td>${s.matches}</td>
+          <td>${pct(s.serve_excess,1)}</td><td>${pct(s.return_excess,1)}</td></tr>`).join('')}
+      </tbody></table>
+      <h3>Recent results</h3>
+      <table><thead><tr><th class="l">Date</th><th class="l">Tournament</th>
+        <th class="l">Surface</th><th class="l">Rd</th><th class="l">Result</th>
+        <th class="l">Opponent</th><th class="l">Score</th></tr></thead><tbody>
+        ${d.results.map(r=>`<tr><td class="l">${r.date}</td>
+          <td class="l">${r.tournament}</td><td class="l">${surf(r.surface)}</td>
+          <td class="l">${r.round}</td>
+          <td class="l ${r.won?'up':'down'}">${r.won?'W':'L'}</td>
+          <td class="l">${r.opponent}</td><td class="l">${r.score}</td></tr>`).join('')}
+      </tbody></table>`;
+  }
+  if(id0) load(id0);
+}
+
+function sparkline(curve){
+  if(!curve || curve.length<2) return '<p class="muted">Not enough history.</p>';
+  const W=1000, H=170, pad=26;
+  const xs = curve.map((_,i)=>i);
+  const ys = curve.map(c=>c.elo);
+  const y0=Math.min(...ys), y1=Math.max(...ys), span=(y1-y0)||1;
+  const X = i => pad + i/(xs.length-1)*(W-2*pad);
+  const Y = v => H-pad - (v-y0)/span*(H-2*pad);
+  const path = curve.map((c,i)=>`${i?'L':'M'}${X(i).toFixed(1)},${Y(c.elo).toFixed(1)}`).join('');
+  const COL={Hard:'var(--hard)',Clay:'var(--clay)',Grass:'var(--grass)',Carpet:'#8c78be'};
+  const dots = curve.filter((_,i)=>i%Math.ceil(curve.length/160)===0)
+    .map((c,j,arr)=>{const i=curve.indexOf(c);
+      return `<circle cx="${X(i).toFixed(1)}" cy="${Y(c.elo).toFixed(1)}" r="1.9"
+        fill="${COL[c.surface]||'var(--dim)'}" opacity=".85"/>`;}).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px">
+    <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="var(--line)"/>
+    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.7"/>
+    ${dots}
+    <text x="${pad}" y="16" fill="var(--dim)" font-size="11">${num(y1)}</text>
+    <text x="${pad}" y="${H-6}" fill="var(--dim)" font-size="11">${num(y0)}</text>
+    <text x="${W-pad}" y="${H-6}" fill="var(--dim)" font-size="11"
+      text-anchor="end">${curve[curve.length-1].date}</text>
+  </svg>
+  <p class="muted">Dot colour = surface. ${curve.length} matches shown.</p>`;
+}
+
+/* ─── MODEL / BACKTEST ────────────────────────────────────────────────────── */
+async function viewModel(){
+  $('#view').innerHTML = `<div class="card"><h2>Model validation</h2>
+    <div id="out"><p class="muted">Loading…</p></div></div>`;
+  const d = await api('/api/backtest');
+  if(d.error){
+    $('#out').innerHTML = `<div class="err">${d.error}</div>
+      <p class="muted" style="margin-top:11px">Run:
+      <code>python backtest.py --seasons 2020-2026</code></p>`;
+    return;
+  }
+  const overall = d.find(r=>r.label==='OVERALL') || d[0];
+  $('#out').innerHTML = `
+    <div class="grid">
+      <div class="stat"><div class="k">Log loss</div>
+        <div class="v">${num(overall.logloss,4)}</div>
+        <div class="s">coin flip = 0.6931</div></div>
+      <div class="stat"><div class="k">Accuracy</div>
+        <div class="v">${pct(overall.accuracy)}</div>
+        <div class="s">${(+overall.n).toLocaleString()} matches</div></div>
+      <div class="stat"><div class="k">Brier</div>
+        <div class="v">${num(overall.brier,4)}</div>
+        <div class="s">lower is better</div></div>
+      <div class="stat"><div class="k">Elo spread</div>
+        <div class="v">${num(overall.elo_multiplier,2)}</div>
+        <div class="s">${Math.abs(overall.elo_multiplier-1)<0.05?'well scaled':
+          overall.elo_multiplier<1?'over-confident':'under-confident'}</div></div>
+      ${overall.total_games_mae?`<div class="stat"><div class="k">Total games MAE</div>
+        <div class="v">${num(overall.total_games_mae,2)}</div>
+        <div class="s">bias ${num(overall.total_games_bias,2)}</div></div>`:''}
+    </div>
+    <h3>Breakdowns</h3>
+    <table><thead><tr><th class="l">Slice</th><th>n</th><th>Log loss</th>
+      <th>Brier</th><th>Accuracy</th><th>Elo mult.</th></tr></thead><tbody>
+      ${d.map(r=>`<tr><td class="l">${r.label}</td>
+        <td>${(+r.n).toLocaleString()}</td><td>${num(r.logloss,4)}</td>
+        <td>${num(r.brier,4)}</td><td>${pct(r.accuracy)}</td>
+        <td>${num(r.elo_multiplier,2)}</td></tr>`).join('')}
+    </tbody></table>
+    <p class="note">Walk-forward and out of sample by construction: every rating
+      read here was frozen before the match it predicts. Player A is fixed as the
+      lower player id, so row order carries no information about the result.</p>`;
+}
+
+/* ─── boot ────────────────────────────────────────────────────────────────── */
+(async function(){
+  try {
+    META = await api('/api/meta');
+  } catch(e){
+    $('#view').innerHTML = `<div class="card"><div class="err">
+      Could not reach the API. Is the server running?</div></div>`;
+    return;
+  }
+
+  // Provenance is always on screen: a viewer must never have to guess whether
+  // they are looking at real results or the synthetic generator's output.
+  if(META.synthetic){
+    $('#warn').innerHTML = '<div class="warn">SYNTHETIC DATA — not real results</div>';
+  } else if(META.built_at){
+    const when = String(META.built_at).slice(0,10);
+    const yrs = META.data && META.data.atp ? META.data.atp.seasons.join('–') : '';
+    $('#warn').innerHTML = `<div class="muted" style="margin-left:auto;font-size:12px">
+      ${yrs} · built ${when}</div>`;
+  }
+
+  if(META.data_ready === false){
+    $('#view').innerHTML = `<div class="card">
+      <h2>No data on this instance</h2>
+      <p class="muted">The build did not produce the processed tables, so there is
+        nothing to rank or predict from. Nothing is being shown rather than an
+        empty table that could be mistaken for a result.</p>
+      <h3>To fix</h3>
+      <p class="muted">Locally: <code>python fetch_data.py</code> then
+        <code>python run_engine.py --build</code>.<br>
+        On Railway: redeploy — the build step regenerates the data.</p>
+      <p class="muted">Source: ${META.source||'unknown'}</p></div>`;
+    document.querySelectorAll('nav a').forEach(a=>a.style.display='none');
+    return;
+  }
+  route();
+})();
+</script>
+</body>
+</html>

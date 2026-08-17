@@ -1,0 +1,12 @@
+# Tennis Engine — RUNTIME requirements (engine + dashboard)
+# Run: pip install -r requirements.txt
+#
+# The engine and the web app only READ local parquet — they never touch the
+# network. The data-fetch libraries live in requirements-fetch.txt so a deployed
+# server never installs them.
+
+pandas>=2.0.0
+pyarrow>=14.0.0
+numpy>=1.26.0
+flask>=3.0.0
+gunicorn>=21.2.0   # production WSGI server (Linux); Flask's dev server is local-only

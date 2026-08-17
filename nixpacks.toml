@@ -11,8 +11,10 @@
 # so there is no state worth persisting across deploys.
 #
 # FETCH_SEASONS controls the range (Railway service variable). More history means
-# better-converged Elo and a longer build; 2005-2026 is the sweet spot at roughly
-# 4-6 minutes. Match data exists back to 1968, serve/return stats from ~1991.
+# better-converged Elo and a longer build. Match data exists back to 1968 and
+# serve/return stats from ~1991, so there is a lot to reach for — but a hosted
+# build has a time limit, and the first attempt at 2005-2026 was killed mid-fetch.
+# Start narrow, confirm the deploy is green, then widen the variable.
 #
 # `python -u` is not optional here. Without it Python block-buffers stdout when
 # stdout is not a TTY, so a 10-minute fetch-and-build emits nothing until it
@@ -21,7 +23,7 @@
 [phases.build]
 dependsOn = ["install"]
 cmds = [
-  "python -u fetch_data.py --seasons ${FETCH_SEASONS:-2005-2026}",
+  "python -u fetch_data.py --seasons ${FETCH_SEASONS:-2015-2026} --skip-rankings",
   "python -u run_engine.py --build",
   "python -u tools/build_report.py",
 ]

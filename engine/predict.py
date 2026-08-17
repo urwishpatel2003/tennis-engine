@@ -88,10 +88,13 @@ W_MARKET = 0.55
 #
 # LEAVE THIS AT 1.0 UNTIL IT HAS BEEN FIT ON REAL DATA. `backtest.py` reports the
 # optimal value on whatever archive is loaded ("optimal Elo spread multiplier").
-# On the synthetic archive it comes out around 0.86, but that number is a property
-# of the generator's noise level, not of tennis — tuning to it would be tuning the
-# engine to itself. Re-run the backtest once the real Sackmann data is in place and
-# set this to what it reports.
+#
+# Read that number PER SEASON, never in aggregate. On the synthetic archive the
+# pooled figure is 0.86, which reads as "the ratings are over-confident" — but the
+# season breakdown runs 0.67 → 0.80 → 0.84 → 0.86 → 0.98 → 0.98, so the shortfall
+# is entirely rating warm-up in the years right after the archive starts, and the
+# spread is already correct once Elo has converged. Tuning to the pooled number
+# would permanently damp mature ratings to compensate for a transient.
 ELO_SPREAD_MULT = 1.0
 
 

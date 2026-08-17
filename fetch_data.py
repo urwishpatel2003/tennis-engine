@@ -42,13 +42,14 @@ from engine.schema import RAW, TOURS, normalise_matches  # noqa: E402
 
 REPO = {"atp": "tennis_atp", "wta": "tennis_wta"}
 
-# Tried in order. The first that returns a 200 wins.
+# Tried in order; the first that returns real CSV wins and is then pinned for the
+# rest of the run (see _preferred_mirror). raw.githubusercontent is the canonical
+# host and normally answers first — the CDNs exist only for networks that block it.
 MIRRORS = (
     "https://raw.githubusercontent.com/JeffSackmann/{repo}/master/{f}",
     "https://media.githubusercontent.com/media/JeffSackmann/{repo}/master/{f}",
     "https://cdn.jsdelivr.net/gh/JeffSackmann/{repo}@master/{f}",
     "https://cdn.statically.io/gh/JeffSackmann/{repo}/master/{f}",
-    "https://gitcdn.link/cdn/JeffSackmann/{repo}/master/{f}",
 )
 
 HEADERS = {"User-Agent": "tennis-engine/0.1 (+local research)", "Accept": "*/*"}
@@ -60,13 +61,28 @@ PLAYER_COLS = ["player_id", "name_first", "name_last", "hand", "dob", "ioc",
 RANKING_COLS = ["ranking_date", "rank", "player_id", "points"]
 
 
-def _get(url: str, timeout: int = 120, retries: int = 2) -> bytes | None:
+# Per-request budget. These used to be 120s with 2 retries, which made the WORST
+# case 120 × 3 attempts × 5 mirrors = 30 minutes for a single file — and a hosted
+# build duly hung and was killed with no output to show for it. A Sackmann CSV is
+# ~1 MB; anything that has not answered in 45s is not going to.
+HTTP_TIMEOUT = 45
+HTTP_RETRIES = 1
+
+# Once one mirror has served a file, every later file tries it FIRST. Without this
+# each of the ~50 downloads re-walks the mirror list from the top and pays the full
+# failure cost of every dead mirror ahead of the working one, every single time.
+_preferred_mirror: str | None = None
+
+
+def _get(url: str, timeout: int = HTTP_TIMEOUT, retries: int = HTTP_RETRIES) -> bytes | None:
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
+            # A 404 is a definitive answer (that season/file does not exist) — do
+            # not retry it, and do not try to be clever about it.
             if e.code == 429 and attempt < retries:
                 time.sleep(4 * (attempt + 1))
                 continue
@@ -79,8 +95,18 @@ def _get(url: str, timeout: int = 120, retries: int = 2) -> bytes | None:
     return None
 
 
+def _looks_like_csv(data: bytes | None) -> bool:
+    """Reject proxy error pages and other HTML masquerading as a 200."""
+    if not data or len(data) < 64:
+        return False
+    head = data.lstrip()[:200].lower()
+    return not (head.startswith(b"<!doctype") or head.startswith(b"<html"))
+
+
 def fetch_csv(repo: str, filename: str, local_clone: Path | None = None) -> bytes | None:
-    """Fetch one CSV, trying a local clone first, then every mirror."""
+    """Fetch one CSV: local clone first, then the preferred mirror, then the rest."""
+    global _preferred_mirror
+
     if local_clone is not None:
         p = local_clone / filename
         if not p.exists():          # allow --from-clone to point at a parent dir
@@ -88,9 +114,18 @@ def fetch_csv(repo: str, filename: str, local_clone: Path | None = None) -> byte
         if p.exists():
             return p.read_bytes()
 
-    for template in MIRRORS:
+    order = list(MIRRORS)
+    if _preferred_mirror in order:
+        order.remove(_preferred_mirror)
+        order.insert(0, _preferred_mirror)
+
+    for template in order:
         data = _get(template.format(repo=repo, f=filename))
-        if data and len(data) > 64 and not data.lstrip().startswith(b"<!DOCTYPE"):
+        if _looks_like_csv(data):
+            if _preferred_mirror != template:
+                _preferred_mirror = template
+                host = template.split("/")[2]
+                print(f"    [using mirror: {host}]", flush=True)
             return data
     return None
 
@@ -166,7 +201,17 @@ def fetch_players(tour: str, clone: Path | None) -> pd.DataFrame:
 
 
 def fetch_rankings(tour: str, seasons: list[int], clone: Path | None) -> pd.DataFrame:
-    """Rankings ship per decade, plus a 'current' file."""
+    """
+    Rankings ship per decade, plus a 'current' file.
+
+    These are BY FAR the heaviest artefacts in the archive — each decade file is
+    millions of rows — and nothing in the engine currently reads
+    `rankings_{tour}.parquet`: the model ranks players itself (see rankings.py),
+    and official ranking points are a 52-week tally that would only duplicate what
+    Elo already measures. They are fetched for completeness and for future use, so
+    `--skip-rankings` exists to drop them from constrained environments like the
+    Railway build, where the download and the concat are the main memory risk.
+    """
     decades = sorted({(y // 10) * 10 for y in seasons})
     names = [f"{tour}_rankings_{str(d)[2:]}s.csv" for d in decades]
     names.append(f"{tour}_rankings_current.csv")
@@ -223,6 +268,9 @@ def main() -> None:
                          "(skips the network entirely)")
     ap.add_argument("--force", action="store_true",
                     help="re-download even if the parquet already exists")
+    ap.add_argument("--skip-rankings", action="store_true",
+                    help="skip the official ranking files — the largest download "
+                         "in the archive, and nothing in the engine reads them yet")
     args = ap.parse_args()
 
     seasons = parse_seasons(args.seasons)
@@ -254,6 +302,9 @@ def main() -> None:
             players.to_parquet(RAW / f"players_{tour}.parquet", index=False)
             print(f"  → players_{tour}.parquet: {len(players):,} players")
 
+        if args.skip_rankings:
+            print("  (skipping rankings — --skip-rankings)")
+            continue
         rankings = fetch_rankings(tour, seasons, clone)
         if not rankings.empty:
             rankings.to_parquet(RAW / f"rankings_{tour}.parquet", index=False)

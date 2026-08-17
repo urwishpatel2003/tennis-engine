@@ -118,14 +118,28 @@ into one strength number.
 unbiased and the plumbing is sound. They say nothing about accuracy on real tennis
 — re-run both after pulling the real archive.
 
-Two caveats worth knowing before you read too much into the table:
+Broken down by season, the picture is more interesting than the headline:
 
-- The backtest reports an **Elo spread multiplier of 0.86**, meaning the ratings
-  are over-confident on this data and `K0` should come down. `ELO_SPREAD_MULT` in
-  `engine/predict.py` is deliberately left at 1.0 — 0.86 is a property of the
-  synthetic generator's noise level, not of tennis, and tuning to it would be
-  tuning the engine to itself. Re-run the backtest on the real archive and set it
-  to what that reports.
+| season | log loss | accuracy | Elo spread multiplier |
+|---|---|---|---|
+| 2021 | 0.6599 | 62.1% | 0.67 |
+| 2022 | 0.6477 | 61.9% | 0.80 |
+| 2023 | 0.6366 | 64.1% | 0.84 |
+| 2024 | 0.6345 | 64.0% | 0.86 |
+| 2025 | 0.6221 | 65.7% | 0.98 |
+| 2026 | 0.6204 | 65.7% | 0.98 |
+
+The multiplier climbs from 0.67 to 0.98 as the ratings mature. So the
+over-confidence in the 0.86 headline is a **warm-up artefact, not a property of
+the model** — the archive only starts in 2018, and early seasons are dominated by
+players whose Elo has not converged. On mature ratings the spread is essentially
+correct, which is why `ELO_SPREAD_MULT` in `engine/predict.py` is left at 1.0.
+
+Two caveats before reading too much into any of it:
+
+- These are synthetic numbers. Re-run the backtest on the real archive; if the
+  *late* seasons still show a multiplier well below 1.0 there, that is a genuine
+  signal to lower `K0`, and the early seasons should be ignored either way.
 - The backtest covers the Elo + serve/return blend only. The conditions,
   head-to-head and height adjustments are applied per-query in `predict.py` and are
   **not** measured by it — see the "Known gap" section in `CLAUDE.md`.

@@ -39,7 +39,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from engine import markov  # noqa: E402
+from engine import markov, replay  # noqa: E402
 from engine.matchups import handedness_elo_delta  # noqa: E402
 from engine.predict import W_ELO, blend_logit  # noqa: E402
 from engine.schema import ELO_SCALE, PROCESSED, RAW, base_spw  # noqa: E402
@@ -157,6 +157,8 @@ def load_frame(tours: list[str]) -> pd.DataFrame:
     out = pd.DataFrame(
         {
             "match_id": df["match_id"].to_numpy(),
+            # Needed to replay head-to-head in date order (engine/replay.py).
+            "tourney_date": df["tourney_date"].to_numpy(),
             "tour": df["tour"].to_numpy(),
             "season": df["season"].to_numpy(),
             "surface": df["surface"].to_numpy(),
@@ -201,14 +203,40 @@ def load_frame(tours: list[str]) -> pd.DataFrame:
     return out
 
 
-def score_frame(df: pd.DataFrame, with_scores: bool = True) -> pd.DataFrame:
-    """Attach every model's probability to each row."""
+def score_frame(df: pd.DataFrame, with_scores: bool = True,
+                adjustments: bool = True) -> pd.DataFrame:
+    """
+    Attach every model's probability to each row.
+
+    `adjustments` replays the per-query layer predict.py applies — conditions,
+    head-to-head and height/style — so the reported log loss describes the model
+    that actually ships. With it off, this reproduces the older Elo +
+    serve/return-only figure, which is what every number published before this
+    existed referred to.
+    """
     # ── Elo view ──────────────────────────────────────────────────────────────
     gap = df["a_elo_blend"].to_numpy() - df["b_elo_blend"].to_numpy()
     hand = np.array(
         [handedness_elo_delta(a, b) for a, b in zip(df["a_hand"], df["b_hand"])]
     )
     gap_adj = gap + hand
+
+    shifts = np.zeros((len(df), 4))
+    if adjustments:
+        # Head-to-head is measured against what the ratings alone expected, so
+        # it is given the UNADJUSTED gap — feeding it the adjusted one would
+        # let conditions leak into the expectation it is scored against.
+        gap_adj = gap_adj + replay.conditions_elo(
+            df["match_id"].to_numpy(), df["a_id"].to_numpy(), df["b_id"].to_numpy())
+        gap_adj = gap_adj + replay.h2h_elo(
+            pd.to_datetime(df["tourney_date"]).to_list(),
+            df["a_id"].to_numpy(), df["b_id"].to_numpy(),
+            df["surface"].to_numpy(), gap, df["y"].to_numpy())
+        shifts = replay.height_shifts(
+            df.get("a_height", pd.Series(np.nan, index=df.index)).to_numpy(),
+            df.get("b_height", pd.Series(np.nan, index=df.index)).to_numpy(),
+            df["tour"].to_numpy(), df["surface"].to_numpy())
+
     df["p_elo"] = 1.0 / (1.0 + np.exp(-gap_adj * math.log(10.0) / ELO_SCALE))
     df["p_elo_overall"] = 1.0 / (
         1.0 + np.exp(-(df["a_elo"] - df["b_elo"]).to_numpy() * math.log(10.0) / ELO_SCALE)
@@ -220,7 +248,9 @@ def score_frame(df: pd.DataFrame, with_scores: bool = True) -> pd.DataFrame:
     pb = np.empty(len(df))
     for i, r in enumerate(df.itertuples(index=False)):
         pa[i], pb[i] = point_probabilities(
-            r.a_serve, r.a_return, r.b_serve, r.b_return, r.tour, r.surface
+            r.a_serve + shifts[i, 0], r.a_return + shifts[i, 1],
+            r.b_serve + shifts[i, 2], r.b_return + shifts[i, 3],
+            r.tour, r.surface
         )
     df["pa_point"] = pa
     df["pb_point"] = pb
@@ -322,6 +352,11 @@ def main() -> None:
     ap.add_argument("--surface", default=None)
     ap.add_argument("--no-scores", action="store_true",
                     help="skip the games/handicap evaluation (much faster)")
+    ap.add_argument("--no-adjustments", action="store_true",
+                    help="score Elo + serve/return only, omitting the conditions "
+                         "/ head-to-head / height layer that predict.py applies. "
+                         "This is what the backtest used to do unconditionally, "
+                         "kept so older published figures stay reproducible.")
     ap.add_argument("--by", nargs="*", default=["season", "surface", "tour"],
                     help="breakdown dimensions")
     ap.add_argument("--out", default=str(PROCESSED / "backtest_results.csv"))
@@ -345,7 +380,8 @@ def main() -> None:
         print("Nothing to evaluate.")
         return
 
-    df = score_frame(df, with_scores=not args.no_scores)
+    df = score_frame(df, with_scores=not args.no_scores,
+                     adjustments=not args.no_adjustments)
 
     rows = [report(df, "OVERALL")]
     for dim in args.by:

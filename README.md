@@ -116,18 +116,28 @@ pre-match rating columns that the build steps froze before each match was played
 rather than recomputing anything. Player A is fixed as the lower player id so row
 order carries no information about the result.
 
-**Real data, 46,482 matches (2015–2026, both players with ≥20 prior matches):**
+**Real data, 47,563 matches (2015–2026, both players with ≥20 prior matches):**
 
 | model | log loss | Brier | accuracy |
 |---|---|---|---|
 | coin flip | 0.6931 | 0.2500 | 50.0% |
-| Elo, overall only | 0.6190 | 0.2155 | 65.1% |
-| Elo, surface blend | 0.6180 | 0.2151 | 65.3% |
-| serve/return simulation | 0.6244 | 0.2172 | 64.8% |
-| **blended model** | **0.6120** | **0.2126** | **65.6%** |
+| Elo, overall only | 0.6198 | 0.2158 | 65.0% |
+| Elo, surface blend | 0.6178 | 0.2149 | 65.3% |
+| serve/return simulation | 0.6250 | 0.2174 | 64.7% |
+| **blended model** | **0.6113** | **0.2123** | **65.8%** |
 
-The blend beats every component it is built from. The **optimal Elo spread
-multiplier is 0.96 — "well scaled"** — so `ELO_SPREAD_MULT` stays at 1.0. (The
+The blend beats every component it is built from.
+
+These figures now include the per-query adjustment layer — conditions,
+head-to-head and height/style — which `backtest.py` used to omit, so the
+published number described a model that was never the one shipping. Replaying it
+is worth 0.6127 → 0.6113 log loss and 65.5% → 65.8% accuracy; `--no-adjustments`
+reproduces the old Elo + serve/return-only figure. Both paths share
+`engine/replay.py` with `tools/validate_adjustments.py`, so the measurement and
+the thing measured cannot drift apart.
+
+The **optimal Elo spread multiplier is 0.96 — "well scaled"** — so
+`ELO_SPREAD_MULT` stays at 1.0. (The
 synthetic archive suggested 0.86; that really was rating warm-up, and reading the
 pooled number would have damped good ratings to fix a transient that does not
 exist in the real data.)

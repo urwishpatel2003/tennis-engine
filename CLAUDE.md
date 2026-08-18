@@ -138,12 +138,21 @@ the comment explaining the *why* next to the number.
 - **The server reads local parquet only.** Nothing in `engine/` or `dashboard/`
   may import anything from `requirements-fetch.txt`.
 
-## Known gap: what the backtest does NOT cover
+## What the backtest covers (and the one thing it still does not)
 
-`backtest.py` evaluates the Elo + serve/return blend. It does **not** exercise the
-conditions (fatigue/rest/home), head-to-head or height/style adjustments, because
-those live in `predict.py` and are applied per-query rather than stored per-match.
-So the reported log loss validates the core, not the adjustment layer.
+`backtest.py` now scores the **whole** model: the Elo + serve/return blend AND the
+per-query adjustment layer (conditions, head-to-head, height/style), replayed by
+`engine/replay.py`. It used to omit that layer, so the published log loss
+described a model that never shipped. `--no-adjustments` reproduces the old
+figure; the layer is worth 0.6127 -> 0.6113 and 65.5% -> 65.8%.
+
+`engine/replay.py` is shared with `tools/validate_adjustments.py` deliberately.
+Each previously carried its own copy of the head-to-head walk, and a leak-sensitive
+rebuild with two implementations is a leak waiting to happen. Section 5 of
+`tests/test_no_leakage.py` asserts the walk never sees the present.
+
+Still NOT covered: the **score markets**. `backtest.py` scores win probability
+only, so the fair total and fair handicap need `tools/validate_score_markets.py`.
 
 `tools/validate_adjustments.py` closes that gap separately, rebuilding each
 adjustment from the same frozen tables and reporting the multiplier that would be

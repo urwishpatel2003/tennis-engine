@@ -174,6 +174,38 @@ check("debut has zero matches at the event",
       (firsts["matches_this_event"] == 0).all())
 check("fatigue is never negative", (c["fatigue_index"] >= 0).all())
 
+# ──────────────────────────────────────────────────────────────────────────────
+print("\n5. the head-to-head replay never sees the present")
+# engine/replay.py rebuilds head-to-head for a whole frame at once so the
+# backtest can score the adjustment layer. Rebuilding history in bulk is exactly
+# where leakage creeps in, and the term is invisible to the rest of the backtest
+# if it goes wrong — this is the assertion that would catch it.
+from engine import replay  # noqa: E402
+
+dates = pd.to_datetime(["2020-01-06", "2020-02-03", "2020-03-02", "2020-04-06"])
+a_ids = np.array([1, 1, 1, 1])
+b_ids = np.array([2, 2, 2, 2])
+surf = np.array(["Hard"] * 4)
+gapv = np.zeros(4)
+# A wins every meeting. The FIRST match must score 0 — there is no prior history
+# — and each later one may only reflect the meetings strictly before it.
+d = replay.h2h_elo(list(dates), a_ids, b_ids, surf, gapv, np.array([1, 1, 1, 1]))
+check("first-ever meeting gets no head-to-head credit", abs(d[0]) < 1e-12, f"{d[0]}")
+check("credit grows with each prior win", d[1] > 0 and d[3] > d[1],
+      f"{d.tolist()}")
+
+# Feeding the same matches in a shuffled order must give the same answer: the
+# function sorts by date internally, so results cannot depend on row order.
+order = [2, 0, 3, 1]
+d2 = replay.h2h_elo([dates[i] for i in order], a_ids[order], b_ids[order],
+                    surf[order], gapv[order], np.array([1, 1, 1, 1])[order])
+check("row order does not change the result",
+      np.allclose(d2, d[order], atol=1e-12), f"{d2.tolist()} vs {d[order].tolist()}")
+
+# If A loses every meeting instead, the sign must flip.
+d3 = replay.h2h_elo(list(dates), a_ids, b_ids, surf, gapv, np.array([0, 0, 0, 0]))
+check("losing the prior meetings flips the sign", d3[3] < 0, f"{d3[3]}")
+
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")
 print(f"{'='*54}\n")

@@ -1,16 +1,17 @@
 """
-Measure the adjustment layer — the part backtest.py has never tested.
+Measure the adjustment layer, term by term.
 
     python tools/validate_adjustments.py --seasons 2015-2026
 
-`backtest.py` scores Elo + serve/return. It does NOT exercise conditions
-(fatigue, rest, home crowd), head-to-head, or the height/style shift, because
-those are applied per-query inside predict.py rather than stored per match. So
-every constant in that layer has been held to reasoning rather than evidence.
+`backtest.py` reports one blended number. This reports the CONTRIBUTION of each
+adjustment separately, and the multiplier that would be optimal for it — which a
+single headline figure cannot show, however honest that figure is.
 
-That gap is not hypothetical. Head-to-head originally turned a single 1-0 meeting
-into a +47 Elo swing — larger than most rating gaps — and it backtested
-*identically* to the fixed version, because the backtest never saw the term.
+The two now share engine/replay.py, so what is measured here is exactly what the
+backtest scores. That was not always true: the backtest omitted this layer
+entirely, and head-to-head once turned a single 1-0 meeting into a +47 Elo swing
+— larger than most rating gaps — while backtesting *identically* to the fixed
+version, because the backtest could not see the term.
 
 This script rebuilds each adjustment from the same frozen, leak-free tables the
 engine uses and asks two questions per adjustment:
@@ -24,10 +25,9 @@ actively backwards.
 
 Leak-free by construction
 -------------------------
-conditions.parquet is written pre-match by engine/conditions.py, so it is joined
-directly. Head-to-head is rebuilt by walking the match log chronologically and
-consulting only meetings already played — the same rule as
-matchups.h2h_record(before=...), but O(n) instead of a full-frame scan per row.
+Guaranteed by engine/replay.py rather than re-argued here: conditions.parquet is
+pre-match by construction, and the head-to-head walk consults only meetings
+already played. `tests/test_no_leakage.py` section 5 asserts it directly.
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ from __future__ import annotations
 import argparse
 import math
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -43,9 +42,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from engine import conditions as cond  # noqa: E402
 from engine import markov  # noqa: E402
 from engine import matchups as mu  # noqa: E402
+from engine import replay  # noqa: E402
 from engine.predict import W_ELO, blend_logit  # noqa: E402
 from engine.schema import ELO_SCALE, PROCESSED, RAW  # noqa: E402
 from engine.serve_return import point_probabilities  # noqa: E402
@@ -75,60 +74,6 @@ def load(tours, lo, hi, min_matches):
     return df.sort_values("tourney_date").reset_index(drop=True)
 
 
-def attach_conditions(df):
-    """Join the pre-match fatigue/rest/home state for both players."""
-    p = PROCESSED / "conditions.parquet"
-    if not p.exists():
-        return df
-    c = pd.read_parquet(p, columns=["match_id", "player_id", "days_rest",
-                                    "fatigue_index", "is_home"])
-    for side, idcol in (("w", "winner_id"), ("l", "loser_id")):
-        part = c.rename(columns={
-            "player_id": idcol,
-            "days_rest": f"{side}_days_rest",
-            "fatigue_index": f"{side}_fatigue",
-            "is_home": f"{side}_home",
-        })
-        df = df.merge(part, on=["match_id", idcol], how="left")
-    return df
-
-
-def h2h_deltas(df):
-    """
-    Head-to-head Elo adjustment per match, walking forward.
-
-    Mirrors matchups.h2h_record: recency half-life of 3 years and same-surface
-    meetings weighted more heavily, then h2h_elo_delta against what the ratings
-    alone expected.
-    """
-    hist = defaultdict(list)          # (a,b) -> [(date, surface, a_won)]
-    out = np.zeros(len(df))
-    for i, r in enumerate(df.itertuples(index=False)):
-        w, l = int(r.winner_id), int(r.loser_id)
-        key = (min(w, l), max(w, l))
-        prior = hist[key]
-        if prior:
-            wins = losses = 0.0
-            for d, s, a_won in prior:
-                yrs = max((r.tourney_date - d).days, 0) / 365.25
-                wt = 0.5 ** (yrs / mu.H2H_RECENCY_HALFLIFE_YEARS)
-                if s == r.surface:
-                    wt *= mu.H2H_SURFACE_WEIGHT
-                # `a_won` is stored for the lower id; re-orient onto the winner.
-                lower_won = a_won
-                if (w == key[0]) == lower_won:
-                    wins += wt
-                else:
-                    losses += wt
-            rec = {"wins": wins, "losses": losses, "n": len(prior),
-                   "raw_wins": 0, "raw_losses": 0}
-            gap = r.w_elo_blend - r.l_elo_blend
-            exp = 1.0 / (1.0 + 10.0 ** (-gap / ELO_SCALE))
-            out[i] = mu.h2h_elo_delta(rec, exp)
-        hist[key].append((r.tourney_date, r.surface, (w == key[0])))
-    return out
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tours", nargs="+", default=["atp", "wta"])
@@ -138,7 +83,6 @@ def main() -> None:
     lo, hi = (args.seasons.split("-") + [args.seasons])[:2]
 
     df = load(tuple(args.tours), int(lo), int(hi), args.min_matches)
-    df = attach_conditions(df)
     print(f"Evaluating the adjustment layer on {len(df):,} matches "
           f"({lo}-{hi})\n")
 
@@ -165,25 +109,6 @@ def main() -> None:
     # ── each adjustment, in Elo points, oriented onto player A ────────────────
     adj = {}
 
-    # conditions: fatigue + short rest / long layoff + home crowd
-    if "w_fatigue" in df.columns:
-        def cond_delta(side):
-            f = pick(f"{side}_fatigue", f"{'l' if side=='w' else 'w'}_fatigue")
-            rest = pick(f"{side}_days_rest", f"{'l' if side=='w' else 'w'}_days_rest")
-            home = pick(f"{side}_home", f"{'l' if side=='w' else 'w'}_home")
-            out = np.zeros(len(df))
-            fv = pd.to_numeric(pd.Series(f), errors="coerce").fillna(0).to_numpy()
-            out += cond.FATIGUE_ELO_PER_INDEX * fv
-            rv = pd.to_numeric(pd.Series(rest), errors="coerce").to_numpy()
-            out += np.where(rv <= 1, cond.SHORT_REST_PENALTY, 0.0)
-            out += np.where(rv >= 60,
-                            cond.LONG_LAYOFF_PENALTY
-                            * np.clip((rv - 60) / 120.0 + 0.5, 0, 1), 0.0)
-            out += np.where(pd.Series(home).fillna(False).to_numpy().astype(bool),
-                            cond.HOME_ELO_BONUS, 0.0)
-            return np.nan_to_num(out)
-        adj["conditions"] = cond_delta("w") - cond_delta("l")
-
     # handedness
     attrs = pd.concat([
         pd.read_parquet(RAW / f"players_{t}.parquet", columns=["player_id", "hand", "height"])
@@ -197,9 +122,16 @@ def main() -> None:
         for i in range(len(df))
     ])
 
-    # head-to-head
-    h = h2h_deltas(df)
-    adj["head_to_head"] = np.where(a_is_w, h, -h)
+    # conditions and head-to-head — both reconstructed by engine/replay.py, the
+    # same code backtest.py now uses. This file used to carry its own copy of
+    # each; two implementations of a leak-sensitive rebuild is one too many, and
+    # the whole point of measuring the layer is that the measurement and the
+    # thing being measured agree.
+    adj["conditions"] = replay.conditions_elo(
+        df["match_id"].to_numpy(), a_id, b_id)
+    adj["head_to_head"] = replay.h2h_elo(
+        pd.to_datetime(df["tourney_date"]).to_list(),
+        a_id, b_id, surf, gap, y)
 
     # ── evaluate ──────────────────────────────────────────────────────────────
     def probs(extra_elo):

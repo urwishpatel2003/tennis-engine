@@ -321,7 +321,7 @@ async function viewLive(){
         const stale = r.stale ? ` <span class="down">· feed stale</span>` : '';
         return `
         <div class="card" style="margin-top:12px;cursor:pointer"
-             onclick="location.hash='#/matchup/'+encodeURIComponent('${r.player_a}|${r.player_b}|${r.surface}')">
+             onclick="location.hash='#/matchup/'+[r.tour,r.player_a,r.player_b,r.surface,r.best_of,r.tournament||''].map(encodeURIComponent).join('|')">
           <div class="muted" style="margin-bottom:6px">
             ${surf(r.surface)} ${r.tournament||''} · ${r.round||''} · best of ${r.best_of}
             · serving: ${srv}${stale}
@@ -540,7 +540,13 @@ async function viewToday(){
           const diff = r.disagreement_a==null?null:r.disagreement_a;
           const side = r.best_side ? (r.best_side==='A'?r.player_a:r.player_b) : null;
           const evc = r.best_ev==null?'':(r.best_ev>0?'up':'down');
-          const link = '#/matchup/' + [r.tour, r.player_a, r.player_b, r.surface, r.best_of]
+          /* Tournament and date MUST travel with the link. Without the event
+             the matchup page cannot count matches played at it, so the
+             event-progress adjustment never fires and the same fixture is
+             priced differently on the two pages - Alexandrova showed 49.8%
+             here and 56.7% there, a 7 point gap that was entirely this. */
+          const link = '#/matchup/' + [r.tour, r.player_a, r.player_b, r.surface,
+              r.best_of, r.tournament||'', String(r.commence_time||'').slice(0,10)]
               .map(encodeURIComponent).join('|');
           const b = r.bet;
           const call = b
@@ -744,8 +750,9 @@ async function viewMatchup(arg){
   const st = JSON.parse(localStorage.getItem('mu')||'{}');
   // #/matchup/tour|A|B|surface|bestOf — set when arriving from a fixture row.
   if (arg) {
-    const [tr, a, b, sf, bo] = arg.split('|').map(decodeURIComponent);
-    if (a && b) Object.assign(st, {tour: tr, a, b, surface: sf, bo: String(bo || 3)});
+    const [tr, a, b, sf, bo, tn, dt] = arg.split('|').map(decodeURIComponent);
+    if (a && b) Object.assign(st, {tour: tr, a, b, surface: sf, bo: String(bo || 3),
+                                   tournament: tn || '', date: dt || ''});
   }
   $('#view').innerHTML = `
    <div class="card">
@@ -778,6 +785,11 @@ async function viewMatchup(arg){
     if(!a||!b){ $('#out').innerHTML='<div class="err">Enter both players.</div>'; return; }
     const q = {a,b,tour:tourFn(),surface:$('#surface').value,
                best_of:$('#bo').value,indoor:$('#indoor').value};
+    // Context from the fixture that was clicked. The engine needs the event to
+    // apply in-tournament progress; without it this page silently prices a
+    // different match from the one on the Today page.
+    if(st.tournament) q.tournament = st.tournament;
+    if(st.date) q.date = st.date;
     localStorage.setItem('mu', JSON.stringify({...q, bo:q.best_of}));
     $('#out').innerHTML='<p class="muted">Simulating…</p>';
     const p = await api('/api/matchup', q);

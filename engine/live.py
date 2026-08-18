@@ -220,7 +220,23 @@ CALIBRATION_BAND_N = 300.0
 # lose about ten times in eleven. Being technically a positive-expectation claim
 # does not rescue a line that tells the reader the opposite of what the model
 # believes. That was the actual complaint, and it was the right complaint.
-MIN_RECOMMEND_PROB = 0.25
+# The model must make the pick the FAVOURITE. Nothing else survives the argument
+# that removed the long shots: if "the model expects this player to lose"
+# disqualified Parry at 9%, it disqualifies Cerundolo at 26% too. The precision
+# argument happens to bottom out at 25%, but the reason a reader is misled has no
+# break there - a row saying "Back X" while the model expects X to lose
+# contradicts the model on its own page at any price.
+#
+# The cost is real and accepted: genuine value on underdogs is no longer shown.
+# That costs little here, because this model has never beaten the market out of
+# sample, so those rows were speculation dressed as instruction.
+MIN_RECOMMEND_PROB = 0.50
+
+# And the edge must clear the noise threshold with room to spare. A bet that
+# exceeded it by 0.05pp of a 4.94pp requirement - one percent - was emitted, and
+# that is not clearing a threshold, it is landing on it. A cliff makes marginal
+# cases arbitrary, so the requirement is a margin rather than a boundary.
+EDGE_MARGIN = 1.5
 
 
 # Last price seen for a fixture BEFORE it started, kept so a match can stay on
@@ -492,6 +508,7 @@ def fixtures(
                 need_pp = MIN_EDGE_SIGMA * math.sqrt(
                     max(prob * (1.0 - prob), 1e-9) / CALIBRATION_BAND_N)
                 too_long = prob < MIN_RECOMMEND_PROB
+                need_pp *= EDGE_MARGIN
                 print(f"[bet] {row['player_a']} v {row['player_b']}: "
                       f"pick {who} @{odds} model {prob*100:.2f}% "
                       f"mkt {(mkt_a if side=='A' else mkt_b)*100:.2f}% "
@@ -517,8 +534,8 @@ def fixtures(
                     row["bet"] = None
                     row["no_bet_reason"] = (
                         "book price is fair or short" if ev <= 0 else
-                        f"the model expects {who} to lose "
-                        f"({prob*100:.0f}% to win) - too long a shot to price"
+                        f"the model makes {who} the underdog "
+                        f"({prob*100:.0f}% to win) - we only back a favourite"
                         if too_long else
                         f"disagreement {edge_pp*100:.1f}pts is inside the "
                         f"{need_pp*100:.1f}pts we can actually measure"

@@ -385,8 +385,8 @@ async function viewToday(){
         <option value="wta">WTA only</option></select></div>
       <div><label>Sort</label><select id="sort">
         <option value="time">Start time</option>
-        <option value="edge">Biggest disagreement</option>
-        <option value="ev">Best EV</option></select></div>
+        <option value="bet">Bets first</option>
+        <option value="edge">Biggest disagreement</option></select></div>
       <button id="reload">Refresh odds</button>
     </div>
     <div id="out"><p class="muted">Loading fixtures…</p></div>
@@ -423,7 +423,7 @@ async function viewToday(){
 
     const s = $('#sort').value;
     if(s==='edge') rows.sort((a,b)=>Math.abs(b.disagreement_a??0)-Math.abs(a.disagreement_a??0));
-    else if(s==='ev') rows.sort((a,b)=>(b.best_ev??-9)-(a.best_ev??-9));
+    else if(s==='bet') rows.sort((a,b)=>((b.bet?b.bet.ev:-9))-((a.bet?a.bet.ev:-9)));
     else rows.sort((a,b)=>String(a.commence_time||'').localeCompare(String(b.commence_time||'')));
 
     const byTour = m.staleness_by_tour || {};
@@ -456,9 +456,12 @@ async function viewToday(){
         <h3>${ev} <span class="muted" style="font-weight:400;text-transform:none">
           ${list[0].surface} · best of ${list[0].best_of}</span></h3>
         <div class="scroll"><table><thead><tr>
-          <th class="l">Start</th><th class="l">Match</th><th>Model</th><th>Market</th>
-          <th>Diff</th><th class="l">Value side</th><th>EV</th><th>Fair total</th>
-          <th class="l">Likely</th><th class="l">Data</th>
+          <th class="l">Start</th><th class="l">Match</th>
+          <th title="What the model thinks the first-named player's chance is, and the decimal odds that would be a fair price for it.">Our price</th>
+          <th title="The median decimal price across bookmakers for the first-named player.">Book price</th>
+          <th class="l" title="A bet only appears when the book is paying MORE than the model's fair price. Most matches will say no bet - that is the normal and expected outcome.">What to do</th>
+          <th title="Quarter Kelly on the model's own number. Sizing, not advice.">Stake</th>
+          <th title="How much the model trusts its own inputs for this match.">Confidence</th>
         </tr></thead><tbody>
         ${list.map(r=>{
           const t = String(r.commence_time||'').slice(5,16).replace('T',' ');
@@ -467,28 +470,40 @@ async function viewToday(){
           const evc = r.best_ev==null?'':(r.best_ev>0?'up':'down');
           const link = '#/matchup/' + [r.tour, r.player_a, r.player_b, r.surface, r.best_of]
               .map(encodeURIComponent).join('|');
+          const b = r.bet;
+          const call = b
+            ? `<span class="up"><strong>Back ${b.player}</strong> at ${num(b.odds,2)}</span>`
+            : (r.market_prob_a==null
+                ? '<span class="dim">no price posted</span>'
+                : '<span class="dim">no bet — book price is fair or short</span>');
           return `<tr class="click" data-go="${link}">
             <td class="l dim">${t}</td>
             <td class="l"><strong>${r.player_a}</strong> v ${r.player_b}</td>
-            <td>${pct(r.model_prob_a)}</td>
-            <td>${r.market_prob_a==null?'—':pct(r.market_prob_a)}</td>
-            <td class="${diff==null?'':(diff>0?'up':'down')}">${
-              diff==null?'—':(diff>0?'+':'')+(diff*100).toFixed(1)}</td>
-            <td class="l">${side||'—'}</td>
-            <td class="${evc}">${r.best_ev==null?'—':(r.best_ev>0?'+':'')+(r.best_ev*100).toFixed(1)+'%'}</td>
-            <td>${num(r.fair_total_line,1)}</td>
-            <td class="l dim">${r.likely_score||''}</td>
+            <td>${pct(r.model_prob_a)}<br><span class="dim">fair ${num(r.fair_odds_a,2)}</span></td>
+            <td>${r.odds_a==null?'—':num(r.odds_a,2)}<br><span class="dim">${
+              r.market_prob_a==null?'':pct(r.market_prob_a)}</span></td>
+            <td class="l">${call}</td>
+            <td>${b?`${b.stake_pct.toFixed(1)}%`:'—'}</td>
             <td class="l ${r.data_quality==='high'?'':'down'}">${r.data_quality}${
               r.ratings_stale_days>21?' <span class="down" title="ratings '
               +r.ratings_stale_days+' days old">·stale</span>':''}</td>
           </tr>`;}).join('')}
         </tbody></table></div>`).join('')}
-      <p class="note">Model and market are both stated for the FIRST-named player.
-        'Value side' and 'EV' refer to whichever side the model prefers, which may be
-        the other one. Disagreement is not proven edge — tennis match markets are
-        efficient, and the same out-of-sample finding is on record for the NFL engine
-        in this workspace. Odds are the median across
-        ${rows[0] && rows[0].books ? rows[0].books : 'all'} bookmakers, de-vigged.</p>`;
+      <p class="note"><strong>How to read this.</strong>
+        <em>Our price</em> is the model's chance for the first-named player, and the
+        decimal odds that would be fair for it. <em>Book price</em> is the median
+        offered across ${rows[0] && rows[0].books ? rows[0].books : 'all'} bookmakers.
+        A bet appears only when the book pays MORE than the model's fair price —
+        most matches will say no bet, and that is the normal outcome, not a fault.
+        <em>Stake</em> is quarter Kelly on the model's own number.
+        <br><br>
+        <strong>What this is not.</strong> A "Back X" row means the model disagrees
+        with the price, not that money is expected. Tested out of sample, this model
+        does NOT beat tennis match markets — the same finding is on record for the NFL
+        engine in this workspace. When the model and the market disagree, the market is
+        the more likely to be right, and today a disagreement on one match turned out
+        to be a defect on our side rather than a mispricing on theirs. Treat the stake
+        as sizing arithmetic, not as advice.</p>`;
   }
 
   // Clicking a fixture opens the full matchup for those two players on that

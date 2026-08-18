@@ -361,6 +361,33 @@ def fixtures(
                 })
                 row["best_side"] = "A" if row["ev_a"] >= row["ev_b"] else "B"
                 row["best_ev"] = max(row["ev_a"], row["ev_b"])
+
+                # What the model would actually DO, decided here rather than in
+                # the page. `best_side` exists on every priced row even when both
+                # sides are negative expectation, and the dashboard used to head
+                # a column with it called "Value side" - so every match appeared
+                # to carry a bet, including the ones where the honest answer is
+                # that the book price is fair or short. Most rows should be None.
+                row["fair_odds_a"] = pred["fair_odds_a"]
+                row["fair_odds_b"] = pred["fair_odds_b"]
+                side, ev, odds, prob, who = (
+                    ("A", row["ev_a"], pa, pred["win_prob_a"], row["player_a"])
+                    if row["ev_a"] >= row["ev_b"] else
+                    ("B", row["ev_b"], pb, pred["win_prob_b"], row["player_b"])
+                )
+                if ev > 0 and odds > 1:
+                    # Quarter Kelly. Full Kelly on a model whose edge is
+                    # unproven is how a bankroll disappears, and this model has
+                    # NOT beaten the market out of sample - see the module
+                    # docstring. The fraction is what the model's own number
+                    # implies, not a recommendation.
+                    edge = prob * (odds - 1) - (1 - prob)
+                    row["bet"] = {
+                        "side": side, "player": who, "odds": odds, "ev": ev,
+                        "stake_pct": max(0.0, edge / (odds - 1)) * 25.0,
+                    }
+                else:
+                    row["bet"] = None
             out.append(row)
 
     out.sort(key=lambda r: (r.get("commence_time") or "", r["tournament"]))

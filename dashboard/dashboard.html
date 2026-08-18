@@ -374,6 +374,73 @@ async function viewLive(){
   load(false);
 }
 
+/* The record is deliberately forward-only. The odds provider keeps no price
+   history, so a backfilled P/L would pair today's ratings with prices nobody
+   was offered - hindsight dressed as evidence. It starts empty and fills. */
+async function loadRecord(){
+if(!$('#rec')) return;   // only the Today view has this panel
+  let d;
+  try { d = await api('/api/track_record'); }
+  catch(e){ $('#rec').innerHTML = `<div class="err">${e}</div>`; return; }
+  if(d.error){ $('#rec').innerHTML = `<div class="err">${d.error}</div>`; return; }
+
+  const warn = d.persistent ? '' : `<div class="err" style="margin-bottom:12px">
+    <strong>This record resets on every deploy.</strong> It is being written inside
+    the container image, which is rebuilt each time the service is deployed. Set
+    <code>BET_LOG_PATH</code> to a mounted Railway Volume to keep it.</div>`;
+
+  if(!d.settled){
+    $('#rec').innerHTML = warn + `<p class="muted">${d.logged||0} bet(s) logged,
+      none settled yet. A bet settles once the result reaches the archive, which
+      for the ATP can lag a couple of days behind the match.</p>`;
+    return;
+  }
+  const pl = d.pl_units, cls = pl>0?'up':(pl<0?'down':'');
+  const note = d.meaningful
+    ? `<p class="note">Sample is large enough to read.</p>`
+    : `<p class="note"><strong>Too few bets to mean anything yet.</strong>
+       ${d.settled} settled; a run needs about ${d.meaningful_after} before profit or
+       loss can be told apart from chance. At a typical 5% margin the swing on 100
+       flat bets is around ±10 units on its own. Expect this to drift negative:
+       out of sample this model does not beat tennis markets.</p>`;
+
+  $('#rec').innerHTML = warn + `
+    <div class="grid">
+      <div class="stat"><div class="k">Profit / loss</div>
+        <div class="v ${cls}">${pl>0?'+':''}${num(pl,2)}u</div>
+        <div class="s">flat, 1 unit a bet</div></div>
+      <div class="stat"><div class="k">Record</div>
+        <div class="v">${d.won}–${d.lost}</div>
+        <div class="s">${d.settled} settled · ${d.open} open</div></div>
+      <div class="stat"><div class="k">ROI</div>
+        <div class="v ${cls}">${d.roi_pct==null?'—':(d.roi_pct>0?'+':'')+d.roi_pct+'%'}</div>
+        <div class="s">per unit staked</div></div>
+      <div class="stat"><div class="k">Sized as suggested</div>
+        <div class="v ${d.pl_kelly_units>0?'up':(d.pl_kelly_units<0?'down':'')}">${
+          d.pl_kelly_units>0?'+':''}${num(d.pl_kelly_units,3)}u</div>
+        <div class="s">quarter Kelly</div></div>
+      <div class="stat"><div class="k">Average price</div>
+        <div class="v">${d.avg_odds==null?'—':num(d.avg_odds,2)}</div>
+        <div class="s">decimal</div></div>
+    </div>
+    ${note}
+    <div class="scroll"><table><thead><tr>
+      <th class="l">Logged</th><th class="l">Match</th><th class="l">Backed</th>
+      <th>Odds</th><th class="l">Result</th><th>P/L</th>
+    </tr></thead><tbody>
+    ${(d.recent||[]).map(r=>`<tr>
+      <td class="l dim">${String(r.logged_at||'').slice(0,10)}</td>
+      <td class="l">${r.player_a} v ${r.player_b}</td>
+      <td class="l">${r.player||''}</td>
+      <td>${num(r.odds,2)}</td>
+      <td class="l ${r.settled?(r.won?'up':'down'):'dim'}">${
+        r.settled?(r.won?'won':'lost'):'open'}</td>
+      <td class="${r.settled?(r.pl_units>0?'up':'down'):''}">${
+        r.settled?((r.pl_units>0?'+':'')+num(r.pl_units,2)+'u'):'—'}</td>
+    </tr>`).join('')}
+    </tbody></table></div>`;
+}
+
 async function viewToday(){
   $('#view').innerHTML = `
    <div class="card">
@@ -390,6 +457,10 @@ async function viewToday(){
       <button id="reload">Refresh odds</button>
     </div>
     <div id="out"><p class="muted">Loading fixtures…</p></div>
+   </div>
+   <div class="card">
+    <h2>Track record <span class="muted" style="font-weight:400">— every bet this page has named</span></h2>
+    <div id="rec"><p class="muted">Loading record…</p></div>
    </div>`;
 
   let DATA = null;
@@ -400,6 +471,7 @@ async function viewToday(){
     if(force) q.refresh = '1';
     DATA = await api('/api/fixtures', q);
     render();
+    loadRecord();
   }
 
   function render(){

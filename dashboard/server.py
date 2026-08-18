@@ -46,6 +46,7 @@ from flask import Flask, jsonify, request, send_from_directory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engine.predict import Engine  # noqa: E402
+from engine import bet_log  # noqa: E402
 from engine import live_feed  # noqa: E402
 from engine.live_state import leverage, win_prob_from_state  # noqa: E402
 from engine.schema import (  # noqa: E402
@@ -405,8 +406,47 @@ def api_fixtures():
     except Exception as e:  # network/quota/provider problems must not 500 the page
         return jsonify({"available": False, "reason": str(e)[:200],
                         "fixtures": [], "meta": {}})
+    # Log whatever the page is about to recommend, so the track record is built
+    # from what was actually shown at the time rather than reconstructed later.
+    # There is no way to backfill it: the odds provider keeps no history, so a
+    # replayed record would pair today's ratings with prices nobody was offered.
+    try:
+        bet_log.append([
+            {"player_a": f["player_a"], "player_b": f["player_b"],
+             "tour": f.get("tour"), "surface": f.get("surface"),
+             "tournament": f.get("tournament"),
+             "commence_time": f.get("commence_time"),
+             "side": f["bet"]["side"], "player": f["bet"]["player"],
+             "odds": f["bet"]["odds"], "ev": f["bet"]["ev"],
+             "stake_pct": f["bet"]["stake_pct"],
+             "model_prob_a": f.get("model_prob_a"),
+             "market_prob_a": f.get("market_prob_a")}
+            for f in d.get("fixtures", []) if f.get("bet")
+        ])
+    except Exception as e:  # noqa: BLE001 - logging must never break the page
+        print(f"[bets] could not log recommendations: {e}", flush=True)
+
     d["available"] = True
     return jsonify(_clean(d))
+
+
+@app.route("/api/track_record")
+def api_track_record():
+    """
+    Profit and loss, in units, on every bet this dashboard has recommended.
+
+    Flat staking (one unit a bet) is the headline because it is how betting
+    records are conventionally reported and cannot be flattered by sizing. The
+    Kelly-weighted figure is shown beside it since that is what the page
+    suggested staking.
+
+    Settled against the archive, so a bet only scores once the result is in it -
+    which for the ATP can lag by a couple of days behind the actual match.
+    """
+    try:
+        return jsonify(_clean(bet_log.summary()))
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)[:200], "logged": 0, "settled": 0})
 
 
 @app.route("/api/live")

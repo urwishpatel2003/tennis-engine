@@ -544,10 +544,11 @@ async function viewToday(){
               .map(encodeURIComponent).join('|');
           const b = r.bet;
           const call = b
-            ? `<span class="up"><strong>Back ${b.player}</strong> at ${num(b.odds,2)}</span>`
+            ? `<span class="up"><strong>Back ${b.player}</strong> at ${num(b.odds,2)}</span>
+               <br><span class="dim">edge ${b.edge_pp}pts, needed ${b.needed_pp}</span>`
             : (r.market_prob_a==null
                 ? '<span class="dim">no price posted</span>'
-                : '<span class="dim">no bet — book price is fair or short</span>');
+                : `<span class="dim">no bet — ${r.no_bet_reason||'book price is fair or short'}</span>`);
           return `<tr class="click" data-go="${link}">
             <td class="l dim">${t}</td>
             <td class="l"><strong>${r.player_a}</strong> v ${r.player_b}</td>
@@ -565,8 +566,15 @@ async function viewToday(){
         <em>Our price</em> is the model's chance for the first-named player, and the
         decimal odds that would be fair for it. <em>Book price</em> is the median
         offered across ${rows[0] && rows[0].books ? rows[0].books : 'all'} bookmakers.
-        A bet appears only when the book pays MORE than the model's fair price —
-        most matches will say no bet, and that is the normal outcome, not a fault.
+        A bet appears only when the book pays more than the model's fair price AND
+        the disagreement is bigger than our ability to measure the model at that
+        probability. A positive expectation alone is not enough: EV is computed
+        from the model's own number, so it restates a disagreement rather than
+        evidencing profit — a model claiming 25% where the truth is 10% still
+        prints a large positive EV and still loses. Long odds are where this
+        bites hardest, because a single percentage point of error becomes a huge
+        apparent return. Most matches will say no bet, and that is the normal
+        outcome, not a fault.
         <em>Stake</em> is quarter Kelly on the model's own number.
         <br><br>
         <strong>What this is not.</strong> A "Back X" row means the model disagrees

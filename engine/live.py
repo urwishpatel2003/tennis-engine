@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -195,6 +196,14 @@ def _archive_context(title: str, tour: str) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 # Odds handling
 # ──────────────────────────────────────────────────────────────────────────────
+# How far a disagreement must exceed measurement noise before it is called a
+# bet, and the per-band sample the noise is estimated from. Calibration was
+# validated in probability bands holding a few hundred matches each, so a
+# standard error is sqrt(p(1-p)/n) with n about this size.
+MIN_EDGE_SIGMA = 1.96
+CALIBRATION_BAND_N = 300.0
+
+
 def devig(price_a: float, price_b: float) -> tuple[float, float]:
     """Proportional de-vig of a two-way decimal market."""
     if not price_a or not price_b or price_a <= 1 or price_b <= 1:
@@ -375,7 +384,27 @@ def fixtures(
                     if row["ev_a"] >= row["ev_b"] else
                     ("B", row["ev_b"], pb, pred["win_prob_b"], row["player_b"])
                 )
-                if ev > 0 and odds > 1:
+                # A positive expectation is NOT sufficient. EV is computed from
+                # the model's own probability, so it restates the model's
+                # disagreement with the price rather than evidencing profit - if
+                # the model says 25% where the truth is 10%, the arithmetic still
+                # prints a large positive number and the bet still loses.
+                #
+                # So the disagreement must also be bigger than our ability to
+                # MEASURE the model at that probability. Calibration was checked
+                # by band over the archive; the bands hold a few hundred cases
+                # each, giving a standard error of sqrt(p(1-p)/n). Anything
+                # inside roughly two of those is indistinguishable from nothing.
+                #
+                # This is what a Cincinnati 2026 recommendation to back Parry at
+                # 13.25 failed. Model 9.00%, market 7.55%, a 1.45pp disagreement
+                # worth +18% EV on paper - and 0.9 standard errors, which is
+                # noise. It also reversed to -9% EV on removing a single
+                # adjustment. An edge that fragile is not an edge.
+                edge_pp = abs(prob - (mkt_a if side == "A" else mkt_b))
+                need_pp = MIN_EDGE_SIGMA * math.sqrt(
+                    max(prob * (1.0 - prob), 1e-9) / CALIBRATION_BAND_N)
+                if ev > 0 and odds > 1 and edge_pp >= need_pp:
                     # Quarter Kelly. Full Kelly on a model whose edge is
                     # unproven is how a bankroll disappears, and this model has
                     # NOT beaten the market out of sample - see the module
@@ -385,9 +414,16 @@ def fixtures(
                     row["bet"] = {
                         "side": side, "player": who, "odds": odds, "ev": ev,
                         "stake_pct": max(0.0, edge / (odds - 1)) * 25.0,
+                        "edge_pp": round(edge_pp * 100, 2),
+                        "needed_pp": round(need_pp * 100, 2),
                     }
                 else:
                     row["bet"] = None
+                    row["no_bet_reason"] = (
+                        "book price is fair or short" if ev <= 0 else
+                        f"disagreement {edge_pp*100:.1f}pts is inside the "
+                        f"{need_pp*100:.1f}pts we can actually measure"
+                    )
             out.append(row)
 
     out.sort(key=lambda r: (r.get("commence_time") or "", r["tournament"]))

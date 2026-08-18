@@ -241,6 +241,52 @@ def main() -> None:
     print(f"  all at their best multipliers                 {log_loss(probs(tuned), y):.5f}")
     print("\n  A best multiplier at or below 0 means the term is noise or backwards.")
 
+    # ── height / style ────────────────────────────────────────────────────────
+    # The one adjustment the loop above cannot reach. Everything else moves the
+    # ELO gap, so it can be added as a delta and re-scored cheaply. Height does
+    # not: it shifts the serve and return EXCESSES, which means the Markov chain
+    # has to be re-solved from scratch for every candidate multiplier. That cost
+    # is why it stayed unmeasured while the rest of the layer was audited — and
+    # "expensive to measure" is not evidence that a constant is right.
+    #
+    # Height is also missing for ~15% of players; those rows get no shift, so
+    # this measures the term where it actually fires.
+    print("\n  HEIGHT / STYLE  (shifts serve/return, so the chain is re-solved)")
+    ht = {(r.tour, int(r.player_id)): r.height for r in attrs.itertuples(index=False)}
+    shifts = np.array([
+        [*mu.height_style_delta(ht.get((tour[i], a_id[i])), tour[i], surf[i]),
+         *mu.height_style_delta(ht.get((tour[i], b_id[i])), tour[i], surf[i])]
+        for i in range(len(df))
+    ])
+    fires = np.any(shifts != 0.0, axis=1)
+    print(f"  fires on {fires.sum():,} of {len(df):,} matches "
+          f"({fires.mean()*100:.0f}% — the rest have no recorded height)")
+
+    print(f"  {'multiplier':<14}{'logloss':>10}{'vs baseline':>14}")
+    print("  " + "─" * 38)
+    best_m, best_ll = None, None
+    for m in (0.0, 0.5, 1.0, 1.5, 2.0, 3.0):
+        ps = np.array([
+            markov.match_win_prob(
+                *point_probabilities(a_s[i] + m * shifts[i, 0],
+                                     a_r[i] + m * shifts[i, 1],
+                                     b_s[i] + m * shifts[i, 2],
+                                     b_r[i] + m * shifts[i, 3],
+                                     tour[i], surf[i]), int(bo[i]))
+            for i in range(len(df))
+        ])
+        p_elo = 1.0 / (1.0 + np.exp(-gap * math.log(10.0) / ELO_SCALE))
+        ll = log_loss(np.array([blend_logit([e, s], [W_ELO, 1 - W_ELO])
+                                for e, s in zip(p_elo, ps)]), y)
+        if best_ll is None or ll < best_ll:
+            best_m, best_ll = m, ll
+        tag = "  <- shipped" if m == 1.0 else ""
+        print(f"  x{m:<13.1f}{ll:>10.5f}{'':>14}{tag}")
+    print(f"\n  best multiplier x{best_m:.1f} at {best_ll:.5f}. "
+          f"x0.0 is the term switched OFF —")
+    print("  if that wins, the height shift is noise and should be retired like "
+          "handedness was.")
+
 
 if __name__ == "__main__":
     main()

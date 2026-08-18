@@ -58,9 +58,22 @@ from engine.schema import ELO_SCALE, PROCESSED, RAW, TOURS
 # get the magnitude right made the cap bind for every record from 2-0 upward, so
 # a 2-0 and a 10-0 scored identically and the signal went flat. The resulting
 # curve is ~1.6% for 1-0, 3.9% for 3-0, 5.5% for 5-0, capping near 6.5%.
-# Measured at a best multiplier of 0.6 over 34,563 matches, so the strength comes
-# down from 200 to 120. The gain is real but tiny (0.61567 -> 0.61566): once the
+# Measured at a best multiplier of 0.6 over 34,563 matches, so the strength came
+# down from 200 to 120. The gain was real but tiny (0.61567 -> 0.61566): once the
 # ratings are in, a pair's history says very little that is not already priced.
+#
+# TREAT THAT 0.6 WITH SUSPICION. Re-measured on a refreshed archive of 47,563
+# matches, the same tool now says the best multiplier is 2.2 — which would put
+# the strength at ~264, ABOVE the 200 it was cut from. Two runs, opposite advice.
+#
+# Neither is wrong; the objective is simply flat. The whole spread between them
+# is ~0.00005 log loss, far inside what a change of sample moves. So the honest
+# reading of any "best multiplier" in this layer is directional only: does the
+# term help at all, and is the sign right. It does NOT locate a magnitude, and
+# re-tuning this constant every time the archive grows would be fitting noise.
+#
+# Left at 120 deliberately, and it should stay there unless a measurement shows
+# a gain that survives a change of sample.
 H2H_PRIOR = 8.0
 H2H_ELO_PER_PROB = 120.0
 H2H_MAX_ELO = 45.0        # hard cap; no pairing is worth more than ~6.5% win prob
@@ -84,6 +97,24 @@ LEFTY_VS_RIGHTY_ELO = 0.0
 # Height: tall players serve bigger but return worse. Expressed as a serve/return
 # excess shift per cm away from tour-average height, applied only where it matters
 # (fast surfaces amplify it, clay damps it).
+#
+# MEASURED, and it survives — unlike handedness. This term shifts the serve/return
+# excesses rather than the Elo gap, so the Markov chain has to be re-solved for
+# every candidate magnitude, which is why it went unaudited long after the rest of
+# the layer had been. Over 47,563 matches (2015-2026), height present for 98%:
+#
+#     off (x0)   0.61267        x1.5   0.61243
+#     x0.5       0.61256        x2.0   0.61241   <- best
+#     x1.0       0.61248        x3.0   0.61248
+#
+# Switching it OFF is the worst outcome and the curve turns back up past x2, so
+# this is a genuine interior optimum, not noise fitting.
+#
+# KEPT AT x1.0 rather than doubled. Off-versus-on is worth 0.00019; x1.0-versus-x2.0
+# is worth 0.00007, and an objective this flat does not locate a magnitude
+# reliably — the head-to-head constant below is the proof, having flipped from
+# "best x0.6" to "best x2.2" between two data refreshes. Read these numbers as
+# "is the term real and is the sign right", never as a target to tune to.
 TOUR_AVG_HEIGHT = {"atp": 185.0, "wta": 173.0}
 HEIGHT_SERVE_PER_CM = 0.00090   # +0.09pt of service points won per cm above average
 HEIGHT_RETURN_PER_CM = -0.00055  # …paid back on return

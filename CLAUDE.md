@@ -65,10 +65,16 @@ python weekly_picks.py --slate slate.csv --top 10
 # Dashboard
 python dashboard/server.py            # http://localhost:5000
 
-# Tests — run all three after touching the engine
-python tests/test_markov.py
-python tests/test_no_leakage.py
-python tests/test_pipeline.py
+# Tests — run all five after touching the engine (201 assertions, no pytest)
+python tests/test_markov.py          # scoring maths
+python tests/test_no_leakage.py      # pre-match state only
+python tests/test_pipeline.py        # end-to-end coherence
+python tests/test_fetch_parsing.py   # score-string / schema parsing
+python tests/test_score_markets.py   # fair handicap + totals line
+
+# Grade the outputs the backtest does NOT score (slow — replays real matches)
+python tools/validate_score_markets.py --sample 12000
+python tools/validate_adjustments.py --seasons 2015-2026
 ```
 
 `run_engine.py --build` flags: `--skip-ratings`, `--skip-serve-return`,
@@ -144,6 +150,14 @@ adjustment from the same frozen tables and reporting the multiplier that would b
 optimal. Running it retired two terms outright — fatigue and short rest measured
 *backwards*, and handedness measured as noise — and rescaled two more. Do not
 change a constant in `conditions.py` or `matchups.py` without re-running it.
+
+**Read its "best multiplier" as directional, not as a target.** The objective is
+flat: head-to-head measured "best x0.6" on a 34.6k-match archive and "best x2.2"
+on a 47.6k one — opposite advice, with the whole spread worth ~0.00005 log loss.
+The column answers "does this term help, and is the sign right". It does not
+locate a magnitude, and re-tuning a constant every time the archive grows is
+fitting noise. Height was left at x1.0 on exactly this reasoning even though the
+run preferred x2.0.
 
 A concrete instance of why that matters: head-to-head originally used a prior of 6
 with the full ~695 Elo-per-probability conversion, which turned a single 1-0

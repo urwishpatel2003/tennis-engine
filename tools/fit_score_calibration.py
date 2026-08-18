@@ -7,28 +7,37 @@ Fit and validate the score-market calibration — totals line and game handicap.
 Why this exists
 ---------------
 TOTAL_GAMES_CALIBRATION was fitted on the EXPECTATION of total games, and it does
-that job: bias fell from +1.80 to +0.27. But `_fair_total_line` returns the
-MEDIAN of the raw distribution, and the same affine map was being applied to it.
-A map that centres a mean does not centre a median unless the distribution's
-shape is right, and it is not: matches went over the supposedly-fair line only
-42% of the time (tools/validate_score_markets.py).
+that job: bias fell from +1.80 to +0.27. But the fair line is a MEDIAN of the raw
+distribution, and the same affine map was being applied to it. A map that centres
+a mean does not centre a median unless the distribution's shape is right, and it
+is not: matches went over the supposedly-fair line only 42% of the time
+(tools/validate_score_markets.py).
 
 So the mean was calibrated and the quantiles were not. This script fits the
-quantile map directly.
+quantile map directly, and its output is the literal contents of `CENTRE` and
+`SPREAD` in engine/score_calib.py — grouped by (tour, best_of), the same key the
+engine uses, so what ships can always be regenerated and checked.
 
 Method
 ------
 Stage 1 caches, per match, the raw Markov quantile function on a τ grid for both
 total games and game margin, plus the observed outcome. Nothing is fitted yet, so
-the cache can be re-fitted cheaply.
+the cache can be re-fitted cheaply with --reuse.
 
 Stage 2 fits `observed ≈ a·q_raw(τ) + b` by QUANTILE regression at τ = 0.5 —
 minimising absolute error, which is exactly the loss whose optimum is the
-conditional median, i.e. the line that splits 50/50 by construction.
+conditional median, i.e. the line that splits 50/50 by construction. The width is
+then fitted SEPARATELY, by flattening the PIT histogram: tying it to the centring
+slope is the defect being fixed, since the slope that centres the line also
+squashes the distribution.
 
 Stage 3 checks it out of sample: fit on odd-indexed matches, score on even. It
 reports the over-rate at the fitted line and the PIT histogram, which says
 whether the whole distribution is the right shape or only its centre.
+
+Two alternatives are also computed and were both rejected on the evidence: a
+per-quantile fit (no gain, worse PIT) and a shared-across-tours fit (hid a
+52.8% / 48.0% split behind a healthy-looking pooled average).
 """
 
 from __future__ import annotations
@@ -218,23 +227,32 @@ def main() -> None:
     med_t = f"qt_{0.50:.2f}"
     med_m = f"qm_{0.50:.2f}"
 
-    print(f"  {'':<10}{'n':>7}{'slope':>9}{'intcpt':>9}"
+    print(f"  {'group':<16}{'n':>7}{'slope':>9}{'intcpt':>9}"
           f"{'over/cover IS':>15}{'OOS':>9}{'MAE OOS':>10}")
-    print("  " + "─" * 69)
+    print("  " + "─" * 78)
 
-    fitted: dict[str, dict[str, list[float]]] = {"total": {}, "margin": {}}
-    for bo in (3, 5):
-        sub = cache[cache["best_of"] == bo].reset_index(drop=True)
+    # Grouped by (tour, best_of) — the SAME key engine/score_calib.py uses.
+    # Fitting these pooled across tours is what produced constants that sent the
+    # ATP over 52.8% of the time and the WTA 48.0%, and a tool that cannot
+    # regenerate what ships is a tool nobody can check.
+    fitted: dict[str, dict[str, dict[int, list[float]]]] = {"total": {}, "margin": {}}
+    spreads: dict[str, dict[str, dict[int, float]]] = {"total": {}, "margin": {}}
+
+    for tour, bo in [(t, b) for t in ("atp", "wta") for b in (3, 5)]:
+        sub = cache[(cache["tour"] == tour) & (cache["best_of"] == bo)]
+        sub = sub.reset_index(drop=True)
         if len(sub) < 400:
+            print(f"  {tour.upper()} bo{bo}: only {len(sub)} matches — skipped; "
+                  f"score_calib falls back for this group")
             continue
-        # Odd/even split: interleaved, so both halves span the same seasons and
-        # tours. A chronological split would confound calibration drift with fit.
+        # Odd/even split: interleaved, so both halves span the same seasons. A
+        # chronological split would confound calibration drift with fit.
         tr = sub.index % 2 == 1
         te = ~tr
 
-        for label, qcol, acol, sign in (
-            ("total", med_t, "actual_total", +1),
-            ("margin", med_m, "actual_margin", +1),
+        for label, qcol, prefix, acol in (
+            ("total", med_t, "qt", "actual_total"),
+            ("margin", med_m, "qm", "actual_margin"),
         ):
             x = sub[qcol].to_numpy(dtype=float)
             y = sub[acol].to_numpy(dtype=float)
@@ -243,21 +261,34 @@ def main() -> None:
             is_rate = (y[tr] > line[tr]).mean()
             oos_rate = (y[te] > line[te]).mean()
             mae = np.mean(np.abs(a * x[te] + b - y[te]))
-            print(f"  bo{bo} {label:<5}{len(sub):>7,}{a:>9.4f}{b:>9.3f}"
+            print(f"  {tour.upper()} bo{bo} {label:<7}{len(sub):>7,}"
+                  f"{a:>9.4f}{b:>9.3f}"
                   f"{is_rate*100:>14.1f}%{oos_rate*100:>8.1f}%{mae:>10.3f}")
-            fitted[label][str(bo)] = [round(a, 4), round(b, 3)]
+            fitted[label].setdefault(tour, {})[bo] = [round(a, 4), round(b, 3)]
 
-            u = pit(sub.iloc[te.nonzero()[0]],
-                    "qt" if label == "total" else "qm", y[te], a, b)
+            # Width, fitted INDEPENDENTLY of the centre by flattening the PIT.
+            # Tying it to the centring slope is the defect this module fixes.
+            Q = sub[[f"{prefix}_{t:.2f}" for t in TAUS]].to_numpy(dtype=float)
+            q50 = Q[:, int(np.argmin(np.abs(TAUS - 0.5)))]
+            centre = a * q50 + b
+            best_s, best_chi = 1.0, float("inf")
+            for sv in np.arange(0.4, 2.61, 0.02):
+                cal = centre[tr][:, None] + sv * (Q[tr] - q50[tr][:, None])
+                u = (cal < y[tr][:, None]).sum(axis=1) / Q.shape[1]
+                h = np.histogram(u, bins=10, range=(0, 1))[0]
+                e = h.sum() / 10.0
+                if ((h - e) ** 2 / e).sum() < best_chi:
+                    best_s, best_chi = float(sv), ((h - e) ** 2 / e).sum()
+            cal = centre[te][:, None] + best_s * (Q[te] - q50[te][:, None])
+            u = (cal < y[te][:, None]).sum(axis=1) / Q.shape[1]
             hist = np.histogram(u, bins=5, range=(0, 1))[0] / max(te.sum(), 1)
-            print(f"       PIT (uniform = 0.20 each): "
+            print(f"       spread {best_s:.2f}   PIT OOS (uniform = 0.20): "
                   + "  ".join(f"{h:.2f}" for h in hist))
+            spreads[label].setdefault(tour, {})[bo] = round(best_s, 3)
 
-    print("\n  Fitted constants (median / LAD, out-of-sample verified):")
-    print("  TOTAL_LINE_CALIBRATION  = "
-          + json.dumps({int(k): v for k, v in fitted["total"].items()}))
-    print("  MARGIN_LINE_CALIBRATION = "
-          + json.dumps({int(k): v for k, v in fitted["margin"].items()}))
+    print("\n  Paste into engine/score_calib.py (out-of-sample verified):")
+    print("  CENTRE = " + json.dumps(fitted))
+    print("  SPREAD = " + json.dumps(spreads))
 
     # ── Does the WHOLE distribution need calibrating, or only its centre? ─────
     # The affine median fit centres the line. It cannot fix skew: one slope has

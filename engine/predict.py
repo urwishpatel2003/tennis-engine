@@ -188,11 +188,18 @@ class Engine:
         self.sr = self._load(PROCESSED / "serve_return_current.parquet")
         self.h2h = self._load(PROCESSED / "h2h.parquet")
         self.conditions = self._load(PROCESSED / "conditions.parquet")
+        # Rally profiles are DISPLAY ONLY. Measured over 6,949 matches where both
+        # players had a real profile, the best rally feature correlated with the
+        # model's residual at r = +0.021 and a fitted Elo adjustment gained 0.0005
+        # log loss in-sample — noise. They describe how a player plays, which is
+        # worth showing, not how likely they are to win.
+        self.rally = self._load(PROCESSED / "rally_current.parquet")
         self.players = self._load_players()
 
         # Fast lookups
         self._elo_idx = self._index(self.ratings, ["tour", "player_id", "surface"])
         self._sr_idx = self._index(self.sr, ["tour", "player_id", "surface"])
+        self._rally_idx = self._index(self.rally, ["tour", "player_id", "surface"])
         self._latest_cond = self._latest_conditions()
 
     # ── loading ───────────────────────────────────────────────────────────────
@@ -334,6 +341,24 @@ class Engine:
                 st.condition["days_rest"] = (as_of - pd.Timestamp(c["tourney_date"])).days
         return st
 
+    def rally_profile(self, pid: int, tour: str, surface: str) -> dict | None:
+        """
+        Rally profile for display, or None when there is not enough of one.
+
+        Under 10 matches the numbers are dominated by whichever opponents happened
+        to turn up, so nothing is returned rather than something misleading.
+        """
+        if self.rally.empty:
+            return None
+        from engine.rally import describe
+        rec = (self._rally_idx.get((tour, pid, surface))
+               or self._rally_idx.get((tour, pid, "overall")))
+        if rec is None or int(rec.get("rally_matches", 0)) < 10:
+            return None
+        out = describe(dict(rec), surface)
+        out["matches"] = int(rec.get("rally_matches", 0))
+        return out
+
     # ── the prediction ────────────────────────────────────────────────────────
     def predict(
         self,
@@ -365,11 +390,15 @@ class Engine:
 
         a = self.player_state(player_a, tour, surface, as_of)
         b = self.player_state(player_b, tour, surface, as_of)
-        return predict_from_states(
+        out = predict_from_states(
             a, b, tour=tour, surface=surface, best_of=best_of, as_of=as_of,
             indoor=indoor, altitude=altitude, final_set_tb=final_set_tb,
             market_prob_a=market_prob_a, tournament=tournament, h2h=self.h2h,
         )
+        # Purely informational; deliberately not an input to anything above.
+        out["rally_a"] = self.rally_profile(a.player_id, tour, surface)
+        out["rally_b"] = self.rally_profile(b.player_id, tour, surface)
+        return out
 
 
 def quick_win_prob(

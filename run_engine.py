@@ -25,7 +25,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from engine import conditions, matchups, ratings, serve_return  # noqa: E402
+from engine import conditions, matchups, rally, ratings, serve_return  # noqa: E402
 from engine.predict import Engine, _print_prediction  # noqa: E402
 from engine.schema import PROCESSED, RAW, SURFACES, TOURS  # noqa: E402
 
@@ -34,6 +34,7 @@ STEPS = [
     ("serve_return", "serve_return.parquet", "serve_return_current.parquet"),
     ("conditions", "conditions.parquet", None),
     ("matchups", "h2h.parquet", None),
+    ("rally", "rally.parquet", "rally_current.parquet"),
 ]
 
 
@@ -42,24 +43,36 @@ def build(tours: tuple[str, ...], skip: set[str]) -> None:
     print(f"Building engine for: {', '.join(t.upper() for t in tours)}")
 
     if "ratings" not in skip:
-        print("\n[1/4] ratings")
+        print("\n[1/5] ratings")
         pm, cur = ratings.build_all(tours)
         pm.to_parquet(PROCESSED / "ratings.parquet", index=False)
         cur.to_parquet(PROCESSED / "ratings_current.parquet", index=False)
 
     if "serve_return" not in skip:
-        print("\n[2/4] serve/return")
+        print("\n[2/5] serve/return")
         pm, cur = serve_return.build_all(tours)
         pm.to_parquet(PROCESSED / "serve_return.parquet", index=False)
         cur.to_parquet(PROCESSED / "serve_return_current.parquet", index=False)
 
     if "conditions" not in skip:
-        print("\n[3/4] conditions")
+        print("\n[3/5] conditions")
         conditions.build_all(tours).to_parquet(PROCESSED / "conditions.parquet", index=False)
 
     if "matchups" not in skip:
-        print("\n[4/4] head-to-head")
+        print("\n[4/5] head-to-head")
         matchups.build_all(tours).to_parquet(PROCESSED / "h2h.parquet", index=False)
+
+    if "rally" not in skip:
+        # Display-only profiles. Absent for the WTA entirely and for anything
+        # before 2021, so this reports and moves on rather than failing when
+        # there is nothing to build.
+        print("\n[5/5] rally profiles")
+        rp, rc = rally.build_all(tours)
+        if rp.empty:
+            print("  [rally] no rally statistics available — skipped")
+        else:
+            rp.to_parquet(PROCESSED / "rally.parquet", index=False)
+            rc.to_parquet(PROCESSED / "rally_current.parquet", index=False)
 
     print(f"\nBuild complete in {time.time()-t0:.1f}s")
 

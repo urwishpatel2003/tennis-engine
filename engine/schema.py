@@ -148,6 +148,22 @@ SERVE_STAT_COLS = [
     "ace", "df", "svpt", "1stIn", "1stWon", "2ndWon", "SvGms", "bpSaved", "bpFaced",
 ]
 
+# Rally-quality statistics. Kept SEPARATE from SERVE_STAT_COLS because their
+# availability is completely different: serve lines exist for ~95% of matches back
+# to the 1990s, whereas winners and unforced errors only start appearing in 2021
+# and reach just 58% of ATP matches even in 2026 — and the WTA feed carries none
+# at all. Anything reading these must handle absence as the normal case.
+#
+# Forced errors are deliberately absent: the upstream column exists but is 0%
+# populated in every year checked.
+RALLY_STAT_COLS = [
+    "winners",      # clean winners hit
+    "unforced",     # unforced errors
+    "netWon",       # net points won
+    "netTotal",     # net points played
+    "tp",           # total points played in the match (denominator for the rates)
+]
+
 RAW_MATCH_COLS = [
     "tourney_id", "tourney_name", "surface", "draw_size", "tourney_level",
     "tourney_date", "match_num",

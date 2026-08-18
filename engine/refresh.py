@@ -506,7 +506,7 @@ def refresh(rebuild: bool = True, verbose: bool = True,
             result["wta_backfill"] = {"error": f"{type(e).__name__}: {e}"[:200]}
 
     if rebuild and added:
-        from engine import conditions, matchups, ratings, serve_return
+        from engine import conditions, matchups, rally, ratings, serve_return
         if verbose:
             print("  [refresh] rebuilding engine ...")
         # Each stage is written and released before the next begins. Holding all
@@ -528,6 +528,13 @@ def refresh(rebuild: bool = True, verbose: bool = True,
             PROCESSED / "conditions.parquet", index=False)
         gc.collect()
         matchups.build_all(("atp", "wta")).to_parquet(PROCESSED / "h2h.parquet", index=False)
+        gc.collect()
+
+        rp, rc = rally.build_all(("atp", "wta"))
+        if not rp.empty:
+            rp.to_parquet(PROCESSED / "rally.parquet", index=False)
+            rc.to_parquet(PROCESSED / "rally_current.parquet", index=False)
+        del rp, rc
         gc.collect()
         result["rebuilt"] = True
     elif rebuild and verbose:

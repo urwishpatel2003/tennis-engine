@@ -29,6 +29,10 @@ cmds = [
   # model price on the Today tab is stale on arrival. --no-rebuild because
   # run_engine builds on the next line anyway.
   "python -u -m engine.refresh --no-rebuild --no-wta-stats || echo '  (refresh skipped - building on base archive)'",
+  # Winners / unforced errors / net points. ~11s for 2021-2026 — a bulk CSV read
+  # per season, nothing like the per-match WTA stats call that broke the build
+  # deadline twice. Display only; measured as no help to the model.
+  "python -u tools/backfill_rally_stats.py --from 2021 || echo '  (rally backfill skipped)'",
   "python -u run_engine.py --build",
   "python -u tools/build_report.py",
 ]

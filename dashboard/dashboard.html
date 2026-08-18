@@ -645,6 +645,31 @@ function renderPrediction(p){
      ${Object.entries(adj).map(([k,v])=>`${k} ${v>0?'+':''}${num(v,1)}`).join(', ')}
      ${p.h2h.n?` · head-to-head ${p.h2h.raw_wins}-${p.h2h.raw_losses}`:''}</p>`:''}
 
+   ${(p.rally_a || p.rally_b) ? `
+   <h3>Rally profile</h3>
+   <table><thead><tr><th class="l"></th><th>${A.name}</th><th>${B.name}</th></tr></thead>
+   <tbody>
+     ${[['Winners','winner_rate'],['Unforced errors','ue_rate'],
+        ['Aggression','aggression'],['Net points','net_freq'],
+        ['Net points won','net_win']].map(([lab,k])=>`<tr>
+       <td class="l">${lab}</td>
+       <td>${p.rally_a?pct(p.rally_a[k]):'—'}</td>
+       <td>${p.rally_b?pct(p.rally_b[k]):'—'}</td></tr>`).join('')}
+     <tr><td class="l">Style</td>
+       <td>${p.rally_a?p.rally_a.style:'—'}</td>
+       <td>${p.rally_b?p.rally_b.style:'—'}</td></tr>
+     <tr><td class="l dim">Matches measured</td>
+       <td class="dim">${p.rally_a?p.rally_a.matches:'—'}</td>
+       <td class="dim">${p.rally_b?p.rally_b.matches:'—'}</td></tr>
+   </tbody></table>
+   <p class="note">Rates are per point played, opponent-adjusted and taken only
+     from matches BEFORE this one. They describe how a player plays, not how likely
+     they are to win — and they are <strong>not inputs to the prediction above</strong>.
+     Tested over 6,949 matches, the strongest rally feature correlated with the
+     model's error at r=0.02 and adding it gained nothing, so it was left out.
+     ATP only; winners and unforced errors are scored by hand at the venue and
+     exist for roughly 44% of matches since 2021 and none before.</p>` : ''}
+
    <h3>Set score</h3>
    <div class="bars">${setKeys.map(k=>{
       const v=p.set_score_probs[k], aWin=+k.split('-')[0] > +k.split('-')[1];

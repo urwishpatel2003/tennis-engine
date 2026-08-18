@@ -54,6 +54,34 @@ ROUND_LABEL = {
 }
 
 
+# Levels hidden from the tournament LISTING. "C" is the ATP Challenger tour:
+# 54 events in 2026 against 45 at tour level, so including them buried the
+# events people actually open. Hidden, not dropped — the matches stay in the
+# archive because Challenger results are real evidence for the ratings, and a
+# direct link to one still resolves.
+MINOR_LEVELS = {"C"}
+
+# The WTA has no separate level code for its second tier: a WTA 125 arrives as
+# "I", the same code as a WTA 250, so it cannot be told apart on level alone.
+# The "125" in the official event name is the only signal available, so that is
+# what is matched — a heuristic, and flagged as one. It is anchored to a word
+# boundary so a main-tour event whose name merely contains those digits is safe.
+MINOR_NAME_TOKEN = "125"
+
+
+def _is_minor_name(name: object) -> bool:
+    """
+    True for a WTA 125, matched on the event name.
+
+    Tokenised rather than a substring or a regex: "Warsaw 125" is the second
+    tier, but a main-tour event whose name merely contains those three digits
+    must not be caught, and an earlier regex attempt silently matched nothing
+    because an escape sequence got mangled on the way into the file. Splitting
+    on whitespace has no escaping to get wrong.
+    """
+    return MINOR_NAME_TOKEN in str(name).split()
+
+
 class TournamentStore:
     """Loads the frames once; every query below is a filter over them."""
 
@@ -103,11 +131,31 @@ class TournamentStore:
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     # ── listing ───────────────────────────────────────────────────────────────
-    def list_tournaments(self, tour: str, season: int | None = None) -> list[dict]:
+    def list_tournaments(self, tour: str, season: int | None = None,
+                         include_minor: bool = False) -> list[dict]:
+        """
+        Events for a (tour, season), newest first.
+
+        ATP Challengers are hidden by default. They outnumber the main tour —
+        54 Challengers against 45 tour-level events in 2026 — so leaving them in
+        buried the events anyone actually looks for. They are filtered from the
+        LISTING only: a direct link to a Challenger draw still resolves, and the
+        matches stay in the archive where the ratings need them, because beating
+        a Challenger field is genuine evidence about a player.
+
+        The WTA has no equivalent level code — a WTA 125 arrives as "I", the
+        same code as a WTA 250 — so its second tier is matched on the "125" in
+        the official event name instead. That is a heuristic rather than a
+        clean field, so it is anchored to a word boundary and kept behind the
+        same switch.
+        """
         m = self.matches
         if m.empty:
             return []
         m = m[m["tour"] == tour]
+        if not include_minor:
+            m = m[~m["tourney_level"].isin(MINOR_LEVELS)]
+            m = m[~m["tourney_name"].map(_is_minor_name)]
         if season is not None:
             m = m[m["season"] == season]
         if m.empty:

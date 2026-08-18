@@ -57,7 +57,7 @@ import pandas as pd
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from engine.schema import REFRESH_LOOKBACK_DAYS  # noqa: F401
+from engine.schema import REFRESH_LOOKBACK_DAYS, build_match_id  # noqa: F401
 from engine.schema import PROCESSED, RAW, normalise_matches
 
 SOURCE = "https://raw.githubusercontent.com/msolonskyi/ManTennisData/master/atp/"
@@ -467,6 +467,15 @@ def _merge(tour: str, new: pd.DataFrame, verbose: bool = True) -> dict:
     # and builds now ingest WTA matches without stats.
     if "src_id" in new.columns and "src_id" not in existing.columns:
         existing["src_id"] = pd.NA
+
+    # Re-key rows already in the archive onto the stable id before comparing.
+    # Older rows were written when match_id ended in a positional cumcount; the
+    # incoming rows now key on src_id, so without this the two would never match
+    # and every refresh would re-add the same matches for the duplicate guard to
+    # strip again. One pass and the archive converges.
+    if "src_id" in existing.columns and existing["src_id"].notna().any():
+        existing = existing.copy()
+        existing["match_id"] = build_match_id(existing)
 
     keep = [c for c in existing.columns]
     merged = pd.concat([existing, new[keep]], ignore_index=True)

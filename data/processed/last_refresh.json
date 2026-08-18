@@ -24,11 +24,11 @@
     },
     "wta": {
       "before": {
-        "matches": 44931,
+        "matches": 44933,
         "last_match": "2026-08-13"
       },
       "after": {
-        "matches": 44931,
+        "matches": 44933,
         "last_match": "2026-08-13"
       },
       "added": 0,
@@ -56,5 +56,5 @@
     "matches": 49285,
     "last_match": "2026-08-13"
   },
-  "completed_at": "2026-08-18T17:04:41+00:00"
+  "completed_at": "2026-08-18T17:09:31+00:00"
 }

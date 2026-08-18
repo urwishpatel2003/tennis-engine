@@ -328,6 +328,39 @@ def parse_score(score: object) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 # Frame normalisation
 # ──────────────────────────────────────────────────────────────────────────────
+def build_match_id(df: pd.DataFrame) -> pd.Series:
+    """
+    The canonical match_id, keyed on the UPSTREAM id wherever we have one.
+
+    It used to end in `match_num` unconditionally. For rows from the base
+    archive that is fine — their match_num comes from the source and does not
+    move. But engine/refresh.py assigns match_num itself, as a positional
+    cumcount within the tournament, so when new results arrived for an event
+    already in the archive every later match_num shifted and the SAME match came
+    back under a new id. Swiatek beating Sakkari at Cincinnati 2026 was stored
+    twice, as match 65 and match 70, and a duplicated result is counted twice by
+    the ratings.
+
+    `src_id` is the upstream identifier: the ATP feed's own `id`, and for the
+    WTA "{gid}-{year}-{MatchID}". Neither moves when later rounds are played, so
+    a match keyed on it survives any number of refreshes. Rows without one (the
+    whole historical archive) keep the match_num form, which is stable for them.
+
+    Exposed separately from normalise_matches so refresh._merge can re-key rows
+    ALREADY in the archive. Without that the archive would keep its old ids, the
+    incoming src-keyed rows would look new on every single run, and the
+    duplicate guard would fire forever instead of converging.
+    """
+    key = df["match_num"].astype("Int64").astype(str)
+    if "src_id" in df.columns:
+        src = df["src_id"].astype("string").str.strip()
+        usable = src.notna() & (src != "") & (src.str.lower() != "nan")
+        key = key.mask(usable, src.str.replace(r"\s+", "_", regex=True))
+    return (df["tour"].astype(str) + "-"
+            + df["tourney_id"].astype(str) + "-"
+            + key.astype(str))
+
+
 def normalise_matches(df: pd.DataFrame, tour: str) -> pd.DataFrame:
     """
     Coerce a raw Sackmann match frame into the engine's canonical schema.
@@ -380,16 +413,7 @@ def normalise_matches(df: pd.DataFrame, tour: str) -> pd.DataFrame:
     df["w_rpw"] = 1.0 - df["l_spw"]
     df["l_rpw"] = 1.0 - df["w_spw"]
 
-    # Unique within a build. NOT stable across refreshes: match_num is a
-    # positional cumcount, so results arriving for an event already in the
-    # archive shift every later match_num and the same match reappears under a
-    # new id. engine/refresh.py therefore also dedupes on the (event, player
-    # pair) key, which is what genuinely identifies a match.
-    df["match_id"] = (
-        df["tour"].astype(str) + "-"
-        + df["tourney_id"].astype(str) + "-"
-        + df["match_num"].astype("Int64").astype(str)
-    )
+    df["match_id"] = build_match_id(df)
 
     df = df.dropna(subset=["tourney_date", "winner_id", "loser_id"])
     df["winner_id"] = df["winner_id"].astype("int64")

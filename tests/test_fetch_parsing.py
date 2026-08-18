@@ -250,6 +250,47 @@ rev = pd.DataFrame({"tourney_id": ["t", "t"], "winner_id": [10, 11],
 _, n2 = rf.drop_duplicate_pairings(rev)
 check("a reversed result is the same pairing", n2 == 1, f"n={n2}")
 
+# match_id must survive a refresh. The whole duplicate problem was that it
+# ended in a positional cumcount, so a later round being played renumbered
+# earlier matches. Keyed on the upstream src_id it cannot move.
+from engine.schema import build_match_id  # noqa: E402
+
+before = pd.DataFrame({
+    "tour": ["wta"] * 2, "tourney_id": ["2026-W1017"] * 2,
+    "match_num": [65, 66],
+    "src_id": ["1017-2026-RS034", "1017-2026-RS035"],
+})
+# The same two matches after five more results shifted their position.
+after = before.copy()
+after["match_num"] = [70, 71]
+check("match_id is unchanged when match_num shifts",
+      build_match_id(before).tolist() == build_match_id(after).tolist(),
+      str(build_match_id(after).tolist()))
+
+# Historical rows have no upstream id; theirs comes from the source and is
+# stable, so they keep the match_num form rather than losing an id entirely.
+legacy = pd.DataFrame({"tour": ["atp"], "tourney_id": ["2010-339"],
+                       "match_num": [7], "src_id": [None]})
+check("rows without an upstream id fall back to match_num",
+      build_match_id(legacy).tolist() == ["atp-2010-339-7"],
+      str(build_match_id(legacy).tolist()))
+check("ids stay unique across both forms",
+      build_match_id(pd.concat([before, legacy], ignore_index=True)).nunique() == 3)
+
+# The Tournaments page hides second-tier events. ATP Challengers have their own
+# level code ("C"); WTA 125s do not - they arrive as "I", the same as a WTA 250
+# - so they are matched on the name, which needs to be exact about it.
+from engine.tournament import MINOR_LEVELS, _is_minor_name  # noqa: E402
+
+check("ATP Challenger level is hidden", "C" in MINOR_LEVELS)
+check("a WTA 125 is recognised", _is_minor_name("Warsaw 125"))
+check("a WTA 125 mid-name is recognised", _is_minor_name("Targu Mures 125"))
+check("a main-tour event is not", not _is_minor_name("Cincinnati"))
+# The reason this tokenises instead of substring-matching.
+check("digits inside a longer token do not count", not _is_minor_name("Open 1250"))
+check("a 125 in a sponsor number does not false-positive",
+      not _is_minor_name("ATP 1250 Trophy"))
+
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")
 print(f"{'='*54}\n")

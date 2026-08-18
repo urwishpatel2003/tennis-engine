@@ -2,14 +2,14 @@
   "tours": {
     "atp": {
       "before": {
-        "matches": 49298,
+        "matches": 49285,
         "last_match": "2026-08-13"
       },
       "after": {
         "matches": 49285,
         "last_match": "2026-08-13"
       },
-      "added": -13,
+      "added": 0,
       "fetched": {
         "new": 631,
         "players_matched": 1262,
@@ -24,14 +24,14 @@
     },
     "wta": {
       "before": {
-        "matches": 44936,
+        "matches": 44931,
         "last_match": "2026-08-13"
       },
       "after": {
         "matches": 44931,
         "last_match": "2026-08-13"
       },
-      "added": -5,
+      "added": 0,
       "fetched": {
         "events_checked": 46,
         "events_with_results": 7,
@@ -47,14 +47,14 @@
     }
   },
   "rebuilt": false,
-  "added_total": -18,
+  "added_total": 0,
   "before": {
-    "matches": 49298,
+    "matches": 49285,
     "last_match": "2026-08-13"
   },
   "after": {
     "matches": 49285,
     "last_match": "2026-08-13"
   },
-  "completed_at": "2026-08-18T16:56:20+00:00"
+  "completed_at": "2026-08-18T17:04:41+00:00"
 }

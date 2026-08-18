@@ -403,6 +403,33 @@ def _fetch_new_wta(after: pd.Timestamp, verbose: bool = True,
     return canon, stats
 
 
+def drop_duplicate_pairings(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """
+    Collapse rows describing the same match, returning (frame, n_dropped).
+
+    Deduping on `match_id` alone is not enough. That id ends in `match_num`, a
+    positional cumcount within the tournament, so when new results arrive for an
+    event already in the archive every later match_num shifts and the SAME match
+    comes back under a new id — observed at Cincinnati 2026, where Swiatek beat
+    Sakkari once but was stored twice, as match 65 and match 70. A duplicated
+    result is counted twice by the ratings, so this is a correctness bug rather
+    than untidiness.
+
+    Two players cannot meet twice in the same event, so (event, unordered player
+    pair) is the key that actually identifies a match. Keeps the FIRST occurrence,
+    which on an existing archive is the row already published.
+    """
+    if df.empty:
+        return df, 0
+    pair = pd.DataFrame({
+        "t": df["tourney_id"].astype(str),
+        "lo": df[["winner_id", "loser_id"]].min(axis=1),
+        "hi": df[["winner_id", "loser_id"]].max(axis=1),
+    })
+    dup = pair.duplicated(keep="first").to_numpy()
+    return df[~dup], int(dup.sum())
+
+
 def _merge(tour: str, new: pd.DataFrame, verbose: bool = True) -> dict:
     """
     Append `new` to a tour's archive, refusing to lose rows silently.
@@ -456,17 +483,10 @@ def _merge(tour: str, new: pd.DataFrame, verbose: bool = True) -> dict:
     # Two players cannot meet twice in one event, so the pairing is the key that
     # actually holds. This catches the duplicate however the id was built, and
     # repairs rows already written by the old code.
-    pair = pd.DataFrame({
-        "t": merged["tourney_id"].astype(str),
-        "lo": merged[["winner_id", "loser_id"]].min(axis=1),
-        "hi": merged[["winner_id", "loser_id"]].max(axis=1),
-    })
-    dupes = int(pair.duplicated(keep="first").sum())
-    if dupes:
-        merged = merged[~pair.duplicated(keep="first").to_numpy()]
-        if verbose:
-            print(f"  [refresh] {tour.upper()}: dropped {dupes} duplicate "
-                  f"pairing(s) — same two players, same event")
+    merged, dupes = drop_duplicate_pairings(merged)
+    if dupes and verbose:
+        print(f"  [refresh] {tour.upper()}: dropped {dupes} duplicate "
+              f"pairing(s) — same two players, same event")
 
     merged = merged.sort_values(["tourney_date", "tourney_id", "match_num"]).reset_index(drop=True)
     merged.to_parquet(path, index=False)

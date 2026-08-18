@@ -202,6 +202,54 @@ h2h = build_h2h(m)
 check("h2h build excludes walkovers/defaults", len(h2h) == 2 * int(
     (m["completed"] | m["retirement"]).sum()))
 
+# ──────────────────────────────────────────────────────────────────────────────
+print("")
+print("9. the refresh can still see an in-progress tournament")
+# Reported as "yesterday's results are not updated". All three bugs guarded
+# here lived in the incremental refresh path, which had never once run against
+# a live event - so nothing had ever exercised them.
+from engine import refresh as rf  # noqa: E402
+from engine.schema import REFRESH_LOOKBACK_DAYS  # noqa: E402
+from engine.wta_source import _round_label  # noqa: E402
+
+# `tourney_date` is a tournament's START date. Filtering incoming events to
+# "starts after the archive's last date" excluded the very event the archive
+# had just reached, so an in-progress tournament could never gain a round. The
+# lookback has to cover the longest event on tour - a Slam is 14 days.
+check("refresh lookback covers a two-week event", REFRESH_LOOKBACK_DAYS >= 14,
+      str(REFRESH_LOOKBACK_DAYS))
+
+# Round labels come from RoundID + draw size, never from how many matches have
+# FINISHED. The old count-based rule called a part-played R16 "SF", and gave
+# R128 and R64 the same name in a bye draw.
+for rid, draw, want in [("1", 96, "R128"), ("2", 96, "R64"), ("3", 96, "R32"),
+                        ("4", 96, "R16"), ("Q", 96, "QF"), ("S", 96, "SF"),
+                        ("F", 96, "F"), ("1", 32, "R32"), ("2", 32, "R16"),
+                        ("1", 64, "R64")]:
+    check(f"RoundID {rid} in a {draw}-draw is {want}",
+          _round_label(rid, draw) == want, _round_label(rid, draw))
+
+# The same match arriving under a shifted match_id must not be stored twice;
+# the ratings would count the result twice.
+dup = pd.DataFrame({
+    "tourney_id": ["2026-W1017"] * 3 + ["2026-W999"],
+    "winner_id": [10, 10, 12, 10],
+    "loser_id": [11, 11, 13, 11],
+    "match_id": ["wta-2026-W1017-65", "wta-2026-W1017-70",
+                 "wta-2026-W1017-71", "wta-2026-W999-1"],
+})
+out, n = rf.drop_duplicate_pairings(dup)
+check("the same pairing twice in one event collapses",
+      n == 1 and len(out) == 3, f"n={n} rows={len(out)}")
+check("the surviving row is the one already published",
+      out["match_id"].tolist()[0] == "wta-2026-W1017-65")
+check("the same pairing in a DIFFERENT event is kept",
+      int((out["tourney_id"] == "2026-W999").sum()) == 1)
+rev = pd.DataFrame({"tourney_id": ["t", "t"], "winner_id": [10, 11],
+                    "loser_id": [11, 10], "match_id": ["a", "b"]})
+_, n2 = rf.drop_duplicate_pairings(rev)
+check("a reversed result is the same pairing", n2 == 1, f"n={n2}")
+
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")
 print(f"{'='*54}\n")

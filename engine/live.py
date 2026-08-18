@@ -220,23 +220,32 @@ CALIBRATION_BAND_N = 300.0
 # lose about ten times in eleven. Being technically a positive-expectation claim
 # does not rescue a line that tells the reader the opposite of what the model
 # believes. That was the actual complaint, and it was the right complaint.
-# The model must make the pick the FAVOURITE. Nothing else survives the argument
-# that removed the long shots: if "the model expects this player to lose"
-# disqualified Parry at 9%, it disqualifies Cerundolo at 26% too. The precision
-# argument happens to bottom out at 25%, but the reason a reader is misled has no
-# break there - a row saying "Back X" while the model expects X to lose
-# contradicts the model on its own page at any price.
+# How poor a chance the model may give a pick before the page refuses to name it.
 #
-# The cost is real and accepted: genuine value on underdogs is no longer shown.
-# That costs little here, because this model has never beaten the market out of
-# sample, so those rows were speculation dressed as instruction.
-MIN_RECOMMEND_PROB = 0.50
+# Set from where the estimate stops being precise enough RELATIVE to its own
+# size. The standard error is sqrt(p(1-p)/n): at 9% it is 1.65pp, 18% of the
+# estimate; at 25% it is 10%; at 40% it is 7%, essentially as good as the 6% at
+# an even match. So a 40% pick is a live underdog the model can genuinely have an
+# opinion about, while a 9% one is a rounding error at long odds.
+#
+# It was briefly 50% - only ever back the favourite - which was too blunt. The
+# argument that removed Parry at 9% was that a row saying "Back X" contradicts a
+# model expecting X to lose heavily; near an even match there is no such
+# contradiction, only a disagreement about a close call, which is exactly where a
+# mispricing can legitimately sit.
+MIN_RECOMMEND_PROB = 0.40
 
-# And the edge must clear the noise threshold with room to spare. A bet that
-# exceeded it by 0.05pp of a 4.94pp requirement - one percent - was emitted, and
-# that is not clearing a threshold, it is landing on it. A cliff makes marginal
-# cases arbitrary, so the requirement is a margin rather than a boundary.
-EDGE_MARGIN = 1.5
+# No extra multiplier on top of the confidence threshold. MIN_EDGE_SIGMA is
+# already 1.96 - a 95% test - and stacking another 1.5x on it was double-counting
+# the same caution, pushing the requirement near 3 sigma. Near an even match that
+# demanded an 8.4pp disagreement with the market, which almost nothing clears, and
+# a rule that emits nothing can never build the record that would tell us whether
+# it is any good.
+#
+# The cliff worry it was meant to answer is handled honestly instead: the row
+# prints the edge AND the requirement, so a bet clearing by a hair is visibly
+# clearing by a hair rather than being silently banned or silently blessed.
+EDGE_MARGIN = 1.0
 
 
 # Last price seen for a fixture BEFORE it started, kept so a match can stay on
@@ -534,8 +543,8 @@ def fixtures(
                     row["bet"] = None
                     row["no_bet_reason"] = (
                         "book price is fair or short" if ev <= 0 else
-                        f"the model makes {who} the underdog "
-                        f"({prob*100:.0f}% to win) - we only back a favourite"
+                        f"the model gives {who} only {prob*100:.0f}% - too far "
+                        f"below an even match to price a disagreement"
                         if too_long else
                         f"disagreement {edge_pp*100:.1f}pts is inside the "
                         f"{need_pp*100:.1f}pts we can actually measure"

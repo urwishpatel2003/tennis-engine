@@ -242,6 +242,42 @@ LONG_LAYOFF_PENALTY = -120.0
 # which is mostly seeds with byes against players who had to qualify through.
 EVENT_PROGRESS_ELO = 80.0
 
+# How many matches of in-event progress are allowed to count. The term is linear
+# below this and flat above it; 99 means no cap, which is what ships.
+#
+# A cap was proposed and MEASURED, and it lost. The trigger was a Cincinnati 2026
+# round of 32 where this term alone moved Alexandrova from 58.6% to 51.0%, on the
+# grounds that she had a first-round bye and her opponent did not - which looked
+# like the model punishing a seed for the draw structure.
+#
+# tools/validate_event_progress.py, 47,492 matches, fit on odd rows and scored on
+# even:
+#
+#     off      0.61341
+#     cap 1    0.61037
+#     cap 2    0.60952
+#     cap 3    0.60916
+#     linear   0.60887   <- best
+#
+# Capping is monotonically worse, and the gain keeps growing with every extra
+# match of credit. The effect is real and the unbounded shape is right: a player
+# already match-tight genuinely does beat one arriving cold, and 93% of the
+# firings are exactly the bye case that prompted the complaint. Leave it alone.
+EVENT_PROGRESS_CAP = 99.0
+
+
+def event_progress_elo(played: float) -> float:
+    """
+    Elo credit for matches already won at this event.
+
+    Kept as a function so predict.py, engine/replay.py and any measurement share
+    one definition of the shape rather than three copies of an arithmetic
+    expression — the divergence that produced a fair line disagreeing with its
+    own probability earlier in this project.
+    """
+    return EVENT_PROGRESS_ELO * min(float(played), EVENT_PROGRESS_CAP)
+
+
 HOME_ELO_BONUS = 18.0           # measured at x0.8 — near enough, and it is small
 ALTITUDE_SERVE_BONUS = 0.010    # +1.0pt of service points won at ~2000m+
 
@@ -261,7 +297,7 @@ def conditions_elo_delta(state: dict) -> tuple[float, dict]:
     # case it simply does not fire.
     played = state.get("matches_this_event")
     if played is not None and np.isfinite(played) and played > 0:
-        parts["event_progress"] = EVENT_PROGRESS_ELO * float(played)
+        parts["event_progress"] = event_progress_elo(float(played))
 
     rest = state.get("days_rest")
     if rest is not None and np.isfinite(rest):

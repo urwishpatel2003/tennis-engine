@@ -54,10 +54,12 @@ def _conditions_lookup() -> dict:
     if not p.exists():
         return {}
     c = pd.read_parquet(
-        p, columns=["match_id", "player_id", "days_rest", "fatigue_index", "is_home"]
+        p, columns=["match_id", "player_id", "days_rest", "fatigue_index", "is_home",
+                    "matches_this_event"],
     )
     return {
-        (r.match_id, int(r.player_id)): (r.days_rest, r.fatigue_index, r.is_home)
+        (r.match_id, int(r.player_id)): (r.days_rest, r.fatigue_index, r.is_home,
+                                         r.matches_this_event)
         for r in c.itertuples(index=False)
     }
 
@@ -81,7 +83,7 @@ def conditions_elo(match_ids, a_ids, b_ids) -> np.ndarray:
             rec = look.get((m, int(pid)))
             if rec is None:
                 continue
-            rest, fatigue, home = rec
+            rest, fatigue, home, played = rec
             f = float(fatigue) if pd.notna(fatigue) else 0.0
             out[i] += cond.FATIGUE_ELO_PER_INDEX * f
             if pd.notna(rest):
@@ -94,6 +96,12 @@ def conditions_elo(match_ids, a_ids, b_ids) -> np.ndarray:
                     )
             if bool(home) if pd.notna(home) else False:
                 out[i] += cond.HOME_ELO_BONUS
+            # Matches already won at THIS event. Previously omitted here, which
+            # meant the term predict.py applies was invisible to both the
+            # backtest and the adjustment validator - the same blind spot that
+            # let a +47 Elo head-to-head swing go unnoticed.
+            if pd.notna(played) and float(played) > 0:
+                out[i] += cond.event_progress_elo(float(played))
         return out
 
     return np.nan_to_num(side(a_ids) - side(b_ids))

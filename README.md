@@ -116,22 +116,22 @@ pre-match rating columns that the build steps froze before each match was played
 rather than recomputing anything. Player A is fixed as the lower player id so row
 order carries no information about the result.
 
-**Real data, 47,563 matches (2015–2026, both players with ≥20 prior matches):**
+**Real data, 47,492 matches (2015–2026, both players with ≥20 prior matches):**
 
 | model | log loss | Brier | accuracy |
 |---|---|---|---|
 | coin flip | 0.6931 | 0.2500 | 50.0% |
 | Elo, overall only | 0.6198 | 0.2158 | 65.0% |
-| Elo, surface blend | 0.6178 | 0.2149 | 65.3% |
+| Elo, surface blend | 0.6148 | 0.2138 | 65.5% |
 | serve/return simulation | 0.6250 | 0.2174 | 64.7% |
-| **blended model** | **0.6113** | **0.2123** | **65.8%** |
+| **blended model** | **0.6069** | **0.2104** | **66.2%** |
 
 The blend beats every component it is built from.
 
 These figures now include the per-query adjustment layer — conditions,
 head-to-head and height/style — which `backtest.py` used to omit, so the
 published number described a model that was never the one shipping. Replaying it
-is worth 0.6127 → 0.6113 log loss and 65.5% → 65.8% accuracy; `--no-adjustments`
+is worth 0.6127 → 0.6069 log loss and 65.5% → 66.2% accuracy; `--no-adjustments`
 reproduces the old Elo + serve/return-only figure. Both paths share
 `engine/replay.py` with `tools/validate_adjustments.py`, so the measurement and
 the thing measured cannot drift apart.

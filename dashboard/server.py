@@ -46,7 +46,11 @@ from flask import Flask, jsonify, request, send_from_directory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engine.predict import Engine  # noqa: E402
-from engine.schema import PROCESSED, RAW, SURFACES, TOURS  # noqa: E402
+from engine import live_feed  # noqa: E402
+from engine.live_state import leverage, win_prob_from_state  # noqa: E402
+from engine.schema import (  # noqa: E402
+    PROCESSED, RAW, SURFACES, TOURS, normalise_surface,
+)
 from engine import live  # noqa: E402
 from engine import refresh as refresher  # noqa: E402
 from engine.tournament import TournamentStore  # noqa: E402
@@ -403,6 +407,99 @@ def api_fixtures():
                         "fixtures": [], "meta": {}})
     d["available"] = True
     return jsonify(_clean(d))
+
+
+@app.route("/api/live")
+def api_live():
+    """
+    Matches in progress, with a win probability computed from the live score.
+
+    Needs LIVE_TENNIS_API_KEY (the free tier is enough). Like /api/fixtures this
+    answers 200 with `available: false` when the key is absent or the upstream
+    is unhappy, because an unconfigured optional feature is not a server error.
+
+    Each match is priced twice: `prematch` is what the engine said before a ball
+    was struck, `live` is the same chain entered at the current score. Showing
+    both is the point — the gap IS the story of the match so far.
+    """
+    if not live_feed.configured():
+        return jsonify({"available": False,
+                        "reason": "LIVE_TENNIS_API_KEY is not set on this service",
+                        "matches": []})
+    if not data_ready():
+        return _no_data()
+
+    tour = request.args.get("tour") or None
+    try:
+        raw = live_feed.live_matches(tour)
+    except live_feed.LiveFeedError as e:
+        # 429 is worth naming: on a free key it means the panel is being polled
+        # harder than the tier allows, which is a configuration problem rather
+        # than a fault, and the operator can act on it.
+        reason = ("rate limited by the provider - raise LIVE_TTL_SECONDS or the tier"
+                  if e.status == 429 else str(e)[:200])
+        return jsonify({"available": False, "reason": reason, "matches": []})
+
+    eng = engine()
+    out = []
+    for m in raw:
+        state = live_feed.parse_state(m)
+        if state is None:
+            continue
+        players = m.get("players") or {}
+        p1 = (players.get("p1") or {}).get("name")
+        p2 = (players.get("p2") or {}).get("name")
+        if not p1 or not p2:
+            continue
+        try:
+            pred = eng.predict(
+                p1, p2,
+                tour=str(m.get("tour", "atp")).lower(),
+                surface=normalise_surface(m.get("surface")),
+                best_of=state["best_of"],
+                tournament=m.get("tournament"),
+            )
+        except Exception:
+            # An unknown player must drop one row, not the whole panel.
+            continue
+        pa, pb = pred["point_win_serve_a"], pred["point_win_serve_b"]
+        try:
+            p_live = win_prob_from_state(pa, pb, **state)
+            lev = leverage(pa, pb, **state)
+        except Exception:
+            continue
+        out.append({
+            "id": m.get("id"),
+            "tour": m.get("tour"),
+            "tournament": m.get("tournament"),
+            "round": m.get("round_code") or m.get("round"),
+            "surface": normalise_surface(m.get("surface")),
+            "best_of": state["best_of"],
+            "player_a": pred["player_a"]["name"],
+            "player_b": pred["player_b"]["name"],
+            "scoreline": live_feed.scoreline(m),
+            "points": [state["points_a"], state["points_b"]],
+            "a_serving": state["a_serving"],
+            "in_tiebreak": state["in_tiebreak"],
+            "sets": [state["sets_a"], state["sets_b"]],
+            "games": [state["games_a"], state["games_b"]],
+            "prematch_a": pred["win_prob_a"],
+            "live_a": p_live,
+            "swing_a": p_live - pred["win_prob_a"],
+            "leverage": lev,
+            "data_quality": pred["data_quality"]["level"],
+            "feed_age_seconds": (m.get("score") or {}).get("age_seconds"),
+            "stale": bool((m.get("score") or {}).get("stale")),
+        })
+
+    out.sort(key=lambda r: -(r["leverage"] or 0))
+    return jsonify(_clean({
+        "available": True,
+        "matches": out,
+        "meta": {"cache_age_seconds": live_feed.cache_age(tour),
+                 "ttl_seconds": live_feed.DEFAULT_TTL,
+                 "count": len(out)},
+    }))
 
 
 # ──────────────────────────────────────────────────────────────────────────────

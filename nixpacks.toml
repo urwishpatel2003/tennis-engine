@@ -23,16 +23,6 @@
 [phases.build]
 dependsOn = ["install"]
 cmds = [
-  # TEMPORARY. Discovers the Live Tennis API's real response shapes so
-  # engine/live_tennis.py can be written against them instead of a guess. It
-  # has to run here because the development machine's corporate proxy blocks
-  # api.livetennisapi.com outright (Zscaler serves its own 403 before the
-  # request leaves the network), while this container has open internet.
-  #
-  # Read the output with `railway logs --build`. No-ops when the key is unset,
-  # never fails the build, and never prints the key. Remove once the parser is
-  # written and verified.
-  "python -u tools/probe_live_tennis.py || true",
   "python -u fetch_data.py --seasons ${FETCH_SEASONS:-2010-2026} --skip-rankings",
   # The Sackmann mirror stopped updating, so extend the ATP archive with recent
   # results before building. Without this the image ships months behind and every

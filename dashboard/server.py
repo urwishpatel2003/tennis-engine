@@ -565,6 +565,48 @@ def _refresh_loop() -> None:
             _run_refresh("daily")
 
 
+def _live_feed_selftest() -> None:
+    """
+    Call the live feed once at boot and say plainly whether it worked.
+
+    This exists because the machine this is developed on cannot reach
+    api.livetennisapi.com at all - the corporate proxy blocks it - nor can it
+    reach this service's own public URL. So the live path could be verified
+    against a captured payload and a mocked feed, and no further: whether real
+    API calls work in production was genuinely unknown from the outside.
+
+    One request per boot, out of a 100/day free tier. It reports the shape of
+    what came back rather than the contents, never prints the key, and can never
+    take the process down - an optional integration failing must not stop the
+    dashboard serving everything else. Set LIVE_SELFTEST=0 to skip it.
+    """
+    if os.environ.get("LIVE_SELFTEST") == "0":
+        return
+    if not live_feed.configured():
+        print("[live] LIVE_TENNIS_API_KEY not set - live panel disabled", flush=True)
+        return
+    try:
+        rows = live_feed.live_matches()
+        scoreable = 0
+        sample = ""
+        for m in rows:
+            st = live_feed.parse_state(m)
+            if st is None:
+                continue
+            scoreable += 1
+            if not sample:
+                sample = (f"{m.get('tour')} {m.get('tournament')} "
+                          f"{m.get('round_code')} sets={st['sets_a']}-{st['sets_b']} "
+                          f"games={st['games_a']}-{st['games_b']}")
+        print(f"[live] OK - API returned {len(rows)} match(es), "
+              f"{scoreable} scoreable singles"
+              + (f"; e.g. {sample}" if sample else ""), flush=True)
+    except live_feed.LiveFeedError as e:
+        print(f"[live] FAILED - {e}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[live] FAILED - {type(e).__name__}: {e}", flush=True)
+
+
 def _start_refresh_thread() -> None:
     if os.environ.get("REFRESH_DAILY") == "1" or os.environ.get("REFRESH_ON_BOOT") == "1":
         threading.Thread(target=_refresh_loop, name="refresh", daemon=True).start()
@@ -681,6 +723,7 @@ def api_backtest():
 
 
 _start_refresh_thread()
+_live_feed_selftest()
 
 
 if __name__ == "__main__":

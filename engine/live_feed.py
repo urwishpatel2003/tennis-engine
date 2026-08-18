@@ -208,11 +208,35 @@ def live_matches(tour: str | None = None, ttl: int | None = None,
         elif age < ttl:
             return hit[1]
 
-    path = "/matches?status=live" + (f"&tour={tour}" if tour else "")
-    payload = _get(path)
-    rows = payload.get("data") if isinstance(payload, dict) else payload
-    out = [m for m in (rows or [])
-           if not m.get("is_doubles") and not m.get("is_qualifying")]
+    # Query by TOUR, not by status, and filter status here.
+    #
+    # Both were probed against the real API. `/matches?tour=atp` returned 200
+    # with every row already carrying status "live"; `/matches?status=live` -
+    # which this module originally called - timed out. One timeout is not proof
+    # the endpoint is broken, but it is no basis for preferring it over one
+    # observed working, and a live panel that hangs is worse than one that
+    # costs an extra request.
+    #
+    # The cost is real: "both tours" is two calls rather than one. The cache is
+    # demand-driven, so that only bites while somebody is actually watching.
+    tours = [tour] if tour else ["atp", "wta"]
+    out: list[dict] = []
+    errors: list[str] = []
+    for t in tours:
+        try:
+            payload = _get(f"/matches?tour={t}")
+        except LiveFeedError as e:
+            errors.append(f"{t}: {e}")
+            continue
+        rows = payload.get("data") if isinstance(payload, dict) else payload
+        out.extend(
+            m for m in (rows or [])
+            if str(m.get("status", "")).lower() == "live"
+            and not m.get("is_doubles") and not m.get("is_qualifying")
+        )
+    # Only fail when NOTHING came back. One tour erroring should not hide the other.
+    if errors and not out:
+        raise LiveFeedError("; ".join(errors))
     _cache[key] = (now, out)
     return out
 

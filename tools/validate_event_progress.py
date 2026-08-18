@@ -80,6 +80,9 @@ def main() -> None:
     ap.add_argument("--tours", nargs="+", default=["atp", "wta"])
     ap.add_argument("--seasons", default="2015-2026")
     ap.add_argument("--min-matches", type=int, default=20)
+    ap.add_argument("--min-diff", type=int, default=0,
+                    help="only score matches where the two players' in-event "
+                         "match counts differ by at least this much")
     args = ap.parse_args()
     lo, hi = (args.seasons.split("-") + [args.seasons])[:2]
 
@@ -122,6 +125,14 @@ def main() -> None:
 
     tr = np.arange(len(df)) % 2 == 1
     te = ~tr
+    if args.min_diff:
+        # The aggregate answer is dominated by one-match differences (93% of
+        # firings). This restricts the scoring set to the tail, where the
+        # unbounded term does its largest and least tested work.
+        keep = np.abs(diff) >= args.min_diff
+        tr, te = tr & keep, te & keep
+        print(f"  restricted to |difference| >= {args.min_diff}: "
+              f"{int(keep.sum()):,} matches, {int(te.sum()):,} in the holdout")
 
     print(f"\n  {'variant':<12}{'train':>10}{'HOLDOUT':>10}{'vs off':>10}"
           f"{'acc':>9}   verdict")

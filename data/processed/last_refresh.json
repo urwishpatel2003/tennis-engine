@@ -28,16 +28,16 @@
         "last_match": "2026-08-13"
       },
       "after": {
-        "matches": 44933,
+        "matches": 44936,
         "last_match": "2026-08-13"
       },
-      "added": 0,
+      "added": 3,
       "fetched": {
         "events_checked": 46,
         "events_with_results": 7,
-        "new": 317,
+        "new": 320,
         "with_serve_stats": 0,
-        "players_matched": 634,
+        "players_matched": 640,
         "players_minted": 0,
         "date_range": [
           "2026-07-26",
@@ -47,7 +47,7 @@
     }
   },
   "rebuilt": false,
-  "added_total": 0,
+  "added_total": 3,
   "before": {
     "matches": 49285,
     "last_match": "2026-08-13"
@@ -56,5 +56,5 @@
     "matches": 49285,
     "last_match": "2026-08-13"
   },
-  "completed_at": "2026-08-18T17:09:31+00:00"
+  "completed_at": "2026-08-18T21:10:06+00:00"
 }

@@ -37,6 +37,13 @@ TIMEOUT = 20
 
 # Demand-driven cache. Raise LIVE_TTL_SECONDS on a free key, lower it on BASIC+.
 DEFAULT_TTL = int(os.environ.get("LIVE_TTL_SECONDS", "300"))
+
+# A manual refresh bypasses the TTL, but not this. Without a floor, holding the
+# button down would spend the free tier's whole daily allowance in under a
+# minute and the panel would then fail for everyone until midnight. Twenty
+# seconds is below anything a person perceives as unresponsive and far above
+# what it takes to protect the quota.
+FORCE_MIN_INTERVAL = int(os.environ.get("LIVE_FORCE_MIN_SECONDS", "20"))
 _cache: dict[str, tuple[float, list[dict]]] = {}
 
 
@@ -176,19 +183,30 @@ def scoreline(match: dict) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 # Fetch
 # ──────────────────────────────────────────────────────────────────────────────
-def live_matches(tour: str | None = None, ttl: int | None = None) -> list[dict]:
+def live_matches(tour: str | None = None, ttl: int | None = None,
+                 force: bool = False) -> list[dict]:
     """
     In-progress singles matches, cached for `ttl` seconds.
 
     One upstream call serves every viewer; see the rate-limit table at the top
     for why that matters on a free key.
+
+    `force` is what the panel's Refresh button sends. Without it the button did
+    nothing observable: the cache returned the same payload, the page re-rendered
+    identical content, and it read as broken. It still honours FORCE_MIN_INTERVAL,
+    so the button is responsive without being a way to burn the daily quota.
     """
     ttl = DEFAULT_TTL if ttl is None else int(ttl)
     key = tour or "all"
     hit = _cache.get(key)
     now = time.time()
-    if hit and now - hit[0] < ttl:
-        return hit[1]
+    if hit:
+        age = now - hit[0]
+        if force:
+            if age < FORCE_MIN_INTERVAL:
+                return hit[1]
+        elif age < ttl:
+            return hit[1]
 
     path = "/matches?status=live" + (f"&tour={tour}" if tour else "")
     payload = _get(path)

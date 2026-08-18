@@ -431,7 +431,8 @@ def api_live():
 
     tour = request.args.get("tour") or None
     try:
-        raw = live_feed.live_matches(tour)
+        raw = live_feed.live_matches(
+            tour, force=request.args.get("refresh") == "1")
     except live_feed.LiveFeedError as e:
         # 429 is worth naming: on a free key it means the panel is being polled
         # harder than the tier allows, which is a configuration problem rather

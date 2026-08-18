@@ -109,6 +109,43 @@ check("a set and a break up beats a set and a break down",
       f"{p:.4f} vs {win_prob_from_state(0.66, 0.63, **mirror):.4f}")
 check("that position is a strong one", p > 0.80, f"{p:.4f}")
 
+# ----------------------------------------------------------------------------
+print("")
+print("6. the Refresh button actually refreshes")
+# It did not, at first. The server cached for 300s, so a click returned the
+# same payload, the page re-rendered identical content, and the control read
+# as dead. A forced refresh must reach upstream - while still being unable to
+# burn the free tier's 100 requests a day if somebody leans on it.
+import os  # noqa: E402
+os.environ.setdefault('LIVE_TENNIS_API_KEY', 'test')
+from engine import live_feed  # noqa: E402
+
+fetches = []
+live_feed._get = lambda path: (fetches.append(path), {'data': []})[1]
+
+live_feed.clear_cache()
+for _ in range(4):
+    live_feed.live_matches('atp')
+check("repeat views share one upstream fetch", len(fetches) == 1, str(len(fetches)))
+
+_before = len(fetches)
+live_feed.live_matches('atp', force=True)
+check("a force inside the floor is served from cache",
+      len(fetches) == _before, f'{len(fetches)-_before} extra fetch(es)')
+
+_ts, _rows = live_feed._cache['atp']
+live_feed._cache['atp'] = (_ts - live_feed.FORCE_MIN_INTERVAL - 1, _rows)
+_before = len(fetches)
+live_feed.live_matches('atp', force=True)
+check("a force past the floor reaches upstream",
+      len(fetches) == _before + 1, f'{len(fetches)-_before} fetch(es)')
+
+check("the floor is short enough to feel responsive",
+      0 < live_feed.FORCE_MIN_INTERVAL <= 60, str(live_feed.FORCE_MIN_INTERVAL))
+check("the floor cannot exhaust a 100/day key",
+      86400 / max(live_feed.FORCE_MIN_INTERVAL, 1) > 100)
+live_feed.clear_cache()
+
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")
 print(f"{'='*54}\n")

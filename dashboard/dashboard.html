@@ -346,20 +346,32 @@ async function viewLive(){
       }).join('');
   }
 
-  async function load(){
-    try { render(await api('/api/live', $('#ltour').value ? {tour:$('#ltour').value} : {})); }
+  /* `force` sends refresh=1, which bypasses the server's cache. Without it the
+     button was silently a no-op: the cached payload came straight back, the page
+     re-rendered identical content, and it looked broken. The button also states
+     what it is doing - an auto-refresh must not flash the panel, but a click
+     with no visible response is indistinguishable from a dead control. */
+  async function load(force){
+    const btn = $('#lreload');
+    if(force){ btn.disabled = true; btn.textContent = 'Refreshing…'; }
+    try {
+      const q = $('#ltour').value ? {tour: $('#ltour').value} : {};
+      if(force) q.refresh = '1';
+      render(await api('/api/live', q));
+    }
     catch(e){ $('#lout').innerHTML = `<div class="err">${e}</div>`; }
+    finally { if(force){ btn.disabled = false; btn.textContent = 'Refresh now'; } }
   }
   function schedule(){
     if(timer) clearInterval(timer);
     const secs = +$('#lauto').value;
-    if(secs > 0) timer = setInterval(load, secs*1000);
+    if(secs > 0) timer = setInterval(() => load(false), secs*1000);
   }
-  $('#lreload').onclick = load;
-  $('#ltour').onchange = load;
+  $('#lreload').onclick = () => load(true);
+  $('#ltour').onchange = () => load(false);
   $('#lauto').onchange = schedule;
   schedule();
-  load();
+  load(false);
 }
 
 async function viewToday(){

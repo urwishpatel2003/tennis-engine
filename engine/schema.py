@@ -380,7 +380,11 @@ def normalise_matches(df: pd.DataFrame, tour: str) -> pd.DataFrame:
     df["w_rpw"] = 1.0 - df["l_spw"]
     df["l_rpw"] = 1.0 - df["w_spw"]
 
-    # Stable unique key. tourney_id already encodes the season.
+    # Unique within a build. NOT stable across refreshes: match_num is a
+    # positional cumcount, so results arriving for an event already in the
+    # archive shift every later match_num and the same match reappears under a
+    # new id. engine/refresh.py therefore also dedupes on the (event, player
+    # pair) key, which is what genuinely identifies a match.
     df["match_id"] = (
         df["tour"].astype(str) + "-"
         + df["tourney_id"].astype(str) + "-"
@@ -445,3 +449,20 @@ def to_long(matches: pd.DataFrame) -> pd.DataFrame:
     long["player_id"] = long["player_id"].astype("int64")
     long["opp_id"] = long["opp_id"].astype("int64")
     return long.sort_values(["tourney_date", "match_id"]).reset_index(drop=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Refresh lookback
+# ──────────────────────────────────────────────────────────────────────────────
+# How far back engine/refresh.py re-checks events on every run.
+#
+# `tourney_date` is a tournament's START date, so filtering incoming events to
+# "starts after the archive's last date" excluded the very event the archive had
+# just reached. Once Cincinnati's opening rounds landed, the archive's last date
+# BECAME Cincinnati's start date, and Cincinnati was then skipped by every
+# subsequent refresh — its remaining rounds could never arrive. An in-progress
+# tournament could never be updated, which is the one job a daily refresh has.
+#
+# 21 days comfortably covers the longest events (a Slam is 14). Re-fetching a
+# finished event is harmless because the merge dedupes on match_id. It lives here
+# rather than in either tour's module because BOTH had the same bug.
+REFRESH_LOOKBACK_DAYS = 21

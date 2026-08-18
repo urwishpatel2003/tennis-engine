@@ -2,9 +2,10 @@
   "generated_at": "2026-08-18",
   "seasons": "2015-2026",
   "matches": 47563,
-  "logloss": 0.6127,
-  "accuracy": 0.6549,
+  "logloss": 0.6113,
+  "accuracy": 0.6579,
   "min_prior_matches": 20,
   "scores_included": false,
-  "note": "Regenerate with: python backtest.py --seasons 2015-2026 --no-scores --by season surface tour, then copy data/processed/backtest_results.csv into reports/. Deliberately NOT run during the Railway build - it pushed the build past its deadline."
+  "note": "Regenerate with: python backtest.py --seasons 2015-2026 --no-scores --by season surface tour, then copy data/processed/backtest_results.csv into reports/. Deliberately NOT run during the Railway build - it pushed the build past its deadline. These figures INCLUDE the per-query adjustment layer (conditions / head-to-head / height), which the backtest used to omit; --no-adjustments reproduces the older 0.6127 / 65.5%.",
+  "adjustments_included": true
 }

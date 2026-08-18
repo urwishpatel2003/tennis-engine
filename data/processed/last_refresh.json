@@ -6,52 +6,55 @@
         "last_match": "2026-08-13"
       },
       "after": {
-        "matches": 49298,
+        "matches": 49285,
         "last_match": "2026-08-13"
       },
-      "added": 0,
+      "added": -13,
       "fetched": {
-        "new": 0,
-        "skipped_qualifying": 0
+        "new": 631,
+        "players_matched": 1262,
+        "players_minted": 0,
+        "skipped_qualifying": 333,
+        "with_serve_stats": 589,
+        "date_range": [
+          "2026-07-27",
+          "2026-08-13"
+        ]
       }
     },
     "wta": {
       "before": {
-        "matches": 44801,
-        "last_match": "2026-08-02"
-      },
-      "after": {
-        "matches": 44898,
+        "matches": 44936,
         "last_match": "2026-08-13"
       },
-      "added": 97,
+      "after": {
+        "matches": 44931,
+        "last_match": "2026-08-13"
+      },
+      "added": -5,
       "fetched": {
-        "events_checked": 41,
-        "events_with_results": 2,
-        "new": 97,
-        "with_serve_stats": 97,
-        "players_matched": 194,
+        "events_checked": 46,
+        "events_with_results": 7,
+        "new": 317,
+        "with_serve_stats": 0,
+        "players_matched": 634,
         "players_minted": 0,
         "date_range": [
-          "2026-08-03",
+          "2026-07-26",
           "2026-08-13"
         ]
       }
     }
   },
-  "rebuilt": true,
-  "added_total": 97,
-  "wta_backfill": {
-    "filled": 0,
-    "remaining": 0
-  },
+  "rebuilt": false,
+  "added_total": -18,
   "before": {
     "matches": 49298,
     "last_match": "2026-08-13"
   },
   "after": {
-    "matches": 49298,
+    "matches": 49285,
     "last_match": "2026-08-13"
   },
-  "completed_at": "2026-08-17T21:17:03+00:00"
+  "completed_at": "2026-08-18T16:56:20+00:00"
 }

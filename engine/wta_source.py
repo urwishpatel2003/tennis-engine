@@ -39,6 +39,8 @@ import urllib.request
 import numpy as np
 import pandas as pd
 
+from engine.schema import REFRESH_LOOKBACK_DAYS
+
 API = "https://api.wtatennis.com/tennis"
 
 # Their level strings → Sackmann tourney_level.
@@ -48,7 +50,38 @@ LEVEL_MAP = {"Grand Slam": "G", "WTA 1000": "P", "WTA 500": "P",
 # Matches in a round → round label. Derived from the round's own size rather than
 # a round index, because draws with byes (the 96-player 1000s) do not start at a
 # clean power of two and their RoundID=1 is not a 128-player round.
-ROUND_BY_SIZE = {64: "R128", 32: "R64", 16: "R32", 8: "R16", 4: "QF", 2: "SF", 1: "F"}
+LOOKBACK_DAYS = REFRESH_LOOKBACK_DAYS  # see engine/schema.py
+
+
+def _round_label(round_id: object, draw_size: object) -> str:
+    """
+    Map the API's RoundID onto a round name using the DRAW SIZE.
+
+    The old code inferred the round from how many FINISHED matches shared a
+    RoundID, which broke twice over on a live event: a partly-played R16 with two
+    results so far was labelled "SF", and two rounds that legitimately hold the
+    same number of matches (R128 and R64 both hold 32 in a bye draw) both came
+    out as "R64". Cincinnati showed 64 matches labelled R64 and 2 labelled SF,
+    with no QF in between — a shape no draw can have.
+
+    RoundID is ordinal and stable whether or not a round has finished, so it is
+    the right key. Named rounds map directly; numeric round i is the draw halved
+    i-1 times.
+    """
+    rid = str(round_id).strip().upper()
+    if rid in ("F", "S", "Q"):
+        return {"F": "F", "S": "SF", "Q": "QF"}[rid]
+    try:
+        i = int(rid)
+    except (TypeError, ValueError):
+        return "R128"
+    try:
+        n = int(draw_size or 32)
+    except (TypeError, ValueError):
+        n = 32
+    # Round the draw up to a power of two — a 96-draw is a 128 bracket with byes.
+    bracket = 1 << max(n - 1, 1).bit_length()
+    return f"R{max(bracket >> max(i - 1, 0), 16)}"
 
 STAT_COLS = ("ace", "df", "svpt", "1stIn", "1stWon", "2ndWon", "SvGms",
              "bpSaved", "bpFaced")
@@ -187,12 +220,19 @@ def build_score(m: dict, a_won: bool) -> str:
 
 
 def list_events(after: pd.Timestamp, max_pages: int = 12) -> list[dict]:
-    """Non-ITF WTA events starting after `after`."""
+    """
+    Non-ITF WTA events that could still have unrecorded results.
+
+    That means everything starting after `after - LOOKBACK_DAYS`, not merely
+    after `after` — see LOOKBACK_DAYS for why the stricter test silently froze
+    in-progress tournaments.
+    """
+    since = after - pd.Timedelta(days=LOOKBACK_DAYS)
     events, seen = [], set()
     for page in range(max_pages):
         try:
             j = _get(f"/tournaments/?page={page}&pageSize=200"
-                     f"&from={after.date().isoformat()}")
+                     f"&from={since.date().isoformat()}")
         except RateLimited:
             # Never degrade this into an empty list. An empty list means "nothing
             # new to fetch", the caller reports "already up to date", and the
@@ -210,7 +250,7 @@ def list_events(after: pd.Timestamp, max_pages: int = 12) -> list[dict]:
             gid, yr, lvl = grp.get("id"), t.get("year"), grp.get("level")
             start = pd.to_datetime(t.get("startDate"), errors="coerce")
             # ITF is excluded so the archive keeps meaning "main tour" throughout.
-            if lvl == "ITF" or gid is None or pd.isna(start) or start <= after:
+            if lvl == "ITF" or gid is None or pd.isna(start) or start < since:
                 continue
             if (gid, yr) in seen:
                 continue
@@ -260,7 +300,7 @@ def fetch(after: pd.Timestamp, resolver, verbose: bool = True,
             by_round.setdefault(str(x.get("RoundID")), []).append(x)
 
         for rid, group in by_round.items():
-            label = ROUND_BY_SIZE.get(len(group), "R128")
+            label = _round_label(rid, ev.get("draw_size"))
             for n, x in enumerate(group, 1):
                 a_won = str(x.get("Winner")) == "2"
                 na = f"{x.get('PlayerNameFirstA') or ''} {x.get('PlayerNameLastA') or ''}".strip()

@@ -57,6 +57,7 @@ import pandas as pd
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from engine.schema import REFRESH_LOOKBACK_DAYS  # noqa: F401
 from engine.schema import PROCESSED, RAW, normalise_matches
 
 SOURCE = "https://raw.githubusercontent.com/msolonskyi/ManTennisData/master/atp/"
@@ -217,7 +218,11 @@ def fetch_new_atp(after: pd.Timestamp, verbose: bool = True) -> tuple[pd.DataFra
             if not t or not t.get("start_dtm"):
                 continue
             start = pd.to_datetime(t["start_dtm"][:8], format="%Y%m%d", errors="coerce")
-            if pd.isna(start) or start <= after:
+            # start < after - lookback, NOT start <= after: the strict test
+            # skipped the in-progress event the archive had just reached, so its
+            # later rounds never arrived. See schema.REFRESH_LOOKBACK_DAYS.
+            if pd.isna(start) or start < after - pd.Timedelta(
+                    days=REFRESH_LOOKBACK_DAYS):
                 skipped_old += 1
                 continue
             rnd = (r.get("stadie_id") or "").upper()
@@ -440,6 +445,29 @@ def _merge(tour: str, new: pd.DataFrame, verbose: bool = True) -> dict:
     merged = pd.concat([existing, new[keep]], ignore_index=True)
     n0 = len(merged)
     merged = merged.drop_duplicates(subset=["match_id"], keep="first")
+
+    # match_id is NOT as stable as schema.py claims. It ends in `match_num`,
+    # which is a positional cumcount within the tournament, so when new results
+    # arrive for an event already in the archive every later match_num shifts
+    # and the SAME match comes back under a new id. Deduping on match_id alone
+    # then lets it through twice — observed at Cincinnati 2026, where Swiatek
+    # beat Sakkari once but was recorded twice, under match numbers 65 and 70.
+    #
+    # Two players cannot meet twice in one event, so the pairing is the key that
+    # actually holds. This catches the duplicate however the id was built, and
+    # repairs rows already written by the old code.
+    pair = pd.DataFrame({
+        "t": merged["tourney_id"].astype(str),
+        "lo": merged[["winner_id", "loser_id"]].min(axis=1),
+        "hi": merged[["winner_id", "loser_id"]].max(axis=1),
+    })
+    dupes = int(pair.duplicated(keep="first").sum())
+    if dupes:
+        merged = merged[~pair.duplicated(keep="first").to_numpy()]
+        if verbose:
+            print(f"  [refresh] {tour.upper()}: dropped {dupes} duplicate "
+                  f"pairing(s) — same two players, same event")
+
     merged = merged.sort_values(["tourney_date", "tourney_id", "match_num"]).reset_index(drop=True)
     merged.to_parquet(path, index=False)
 

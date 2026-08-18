@@ -170,6 +170,14 @@ def main() -> None:
 
     # The stats may simply be nested in the match object already.
     print('')
+    import json as _json
+    print('')
+    print('  --- RAW score object (values, not shapes) ---')
+    print('  ' + _json.dumps(m.get('score'), indent=2)[:1200])
+    print('  sets_won_by_player:', m.get('score', {}).get('sets'))
+    print('  games_raw:', m.get('score', {}).get('games'))
+    print('  points_raw:', m.get('score', {}).get('points'),
+          '| server:', m.get('score', {}).get('server'))
     print('  --- players / score sub-objects (shape only) ---')
     for field in ('players', 'score'):
         if isinstance(m.get(field), (dict, list)):

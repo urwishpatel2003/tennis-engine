@@ -591,15 +591,18 @@ function renderPrediction(p){
      <span>fair ${num(p.fair_odds_b,2)}</span></div>
 
    <div class="grid" style="margin-top:16px">
-     <div class="stat"><div class="k">Expected games</div>
+     <div class="stat" title="Average total games. Sits ABOVE the fair line because match length is right-skewed — mostly short matches, then a long tail.">
+       <div class="k">Expected games</div>
        <div class="v">${num(p.expected_games_a,1)} – ${num(p.expected_games_b,1)}</div>
-       <div class="s">total ${num(p.expected_total_games,1)}</div></div>
-     <div class="stat"><div class="k">Fair handicap</div>
+       <div class="s">total ${num(p.expected_total_games,1)} · mean</div></div>
+     <div class="stat" title="The handicap at which either side is a coin flip. Measured: covers 49.7% over 10,000 replayed matches.">
+       <div class="k">Fair handicap</div>
        <div class="v">${p.fair_game_handicap_a>0?'+':''}${num(p.fair_game_handicap_a,1)}</div>
        <div class="s">games, ${A.name.split(' ').pop()}</div></div>
-     <div class="stat"><div class="k">Fair total</div>
+     <div class="stat" title="The total at which over and under are a coin flip. Measured: goes over 50.4% over 10,000 replayed matches.">
+       <div class="k">Fair total</div>
        <div class="v">${num(p.fair_total_games_line,1)}</div>
-       <div class="s">games</div></div>
+       <div class="s">games · 50/50 line</div></div>
      <div class="stat"><div class="k">Hold %</div>
        <div class="v">${pct(p.hold_prob_a,0)} / ${pct(p.hold_prob_b,0)}</div>
        <div class="s">A / B service games</div></div>

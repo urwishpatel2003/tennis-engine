@@ -141,66 +141,67 @@ def main() -> None:
             print(f"  {str(body)[:220]}")
 
     # 3. The question that decides whether this feed is worth paying for: does
-    #    it carry the serve statistics the point model needs — aces, double
+    #    it carry the serve statistics the point model needs - aces, double
     #    faults, the first/second serve split, break points?
     #
     #    Paging COMPLETED matches is gated behind the BASIC tier, so that route
-    #    is closed on a free key. But a LIVE match is visible, and if a live
-    #    match exposes the full serve-stat set then a finished one almost
-    #    certainly carries the final version of the same fields. That answers
-    #    the question for the price of nothing, which is the right order: verify
-    #    before recommending a subscription, not after.
-    print(f"
-{'='*70}
-SERVE STATISTICS — probed on a LIVE singles match")
-    status, body = call("/matches?tour=atp", build(key))
+    #    is closed on a free key. But a LIVE match is visible, and if a live one
+    #    exposes the full serve-stat set then a finished one almost certainly
+    #    carries the final version of the same fields. That settles it for the
+    #    price of nothing, which is the right order: verify before recommending
+    #    a subscription, not after.
+    bar = '=' * 70
+    print('')
+    print(bar)
+    print('SERVE STATISTICS - probed on a LIVE singles match')
+    status, body = call('/matches?tour=atp', build(key))
     if status != 200:
-        status, body = call("/matches?tour=wta", build(key))
-    items = body.get("data") if isinstance(body, dict) else None
+        status, body = call('/matches?tour=wta', build(key))
+    items = body.get('data') if isinstance(body, dict) else None
     if not items:
-        print("  no live matches available right now — re-run during play")
+        print('  no live matches right now - re-run during play')
         return
 
-    singles = [m for m in items if not m.get("is_doubles")] or items
+    singles = [x for x in items if not x.get('is_doubles')] or items
     m = singles[0]
-    mid = m.get("id")
+    mid = m.get('id')
     print(f"  match {mid}: {m.get('tournament')} {m.get('round_code')} "
           f"status={m.get('status')} doubles={m.get('is_doubles')}")
 
-    # The full match object first — the statistics may simply be nested in it.
-    print("
-  --- players / score sub-objects (shape only) ---")
-    for field in ("players", "score"):
+    # The stats may simply be nested in the match object already.
+    print('')
+    print('  --- players / score sub-objects (shape only) ---')
+    for field in ('players', 'score'):
         if isinstance(m.get(field), (dict, list)):
-            print(f"  {field}:")
-            print(shape(m[field], depth=2))
+            print(f'  {field}:')
+            print(shape(m[field], depth=2, max_depth=4))
 
-    for path in (f"/matches/{mid}", f"/matches/{mid}/statistics",
-                 f"/matches/{mid}/stats", f"/matches/{mid}/summary",
-                 f"/statistics?match_id={mid}"):
+    for path in (f'/matches/{mid}', f'/matches/{mid}/statistics',
+                 f'/matches/{mid}/stats', f'/matches/{mid}/summary',
+                 f'/statistics?match_id={mid}'):
         status, body = call(path, build(key))
-        print(f"
-  {path} -> HTTP {status}")
+        print('')
+        print(f'  {path} -> HTTP {status}')
         if status == 200:
             print(shape(body, depth=1, max_depth=4))
         else:
-            print(f"     {str(body)[:200]}")
+            print(f'     {str(body)[:200]}')
 
-    # Two smaller corrections the first run surfaced, checked while we are here.
-    print(f"
-{'='*70}
-CORRECTIONS FROM THE FIRST RUN")
-    for label, path in [("rankings wants `system`", "/rankings?system=atp"),
-                        ("tournaments filtered by tour", "/tournaments?tour=atp"),
-                        ("upcoming matches", "/matches?status=upcoming&tour=atp")]:
+    # Two corrections the first run surfaced, checked while we are here.
+    print('')
+    print(bar)
+    print('CORRECTIONS FROM THE FIRST RUN')
+    for label, path in [('rankings wants `system`', '/rankings?system=atp'),
+                        ('tournaments by tour', '/tournaments?tour=atp'),
+                        ('upcoming', '/matches?status=upcoming&tour=atp')]:
         status, body = call(path, build(key))
-        print(f"
-  {label}: {path} -> HTTP {status}")
+        print('')
+        print(f'  {label}: {path} -> HTTP {status}')
         if status == 200:
             print(shape(body, depth=1))
         else:
-            print(f"     {str(body)[:180]}")
+            print(f'     {str(body)[:180]}')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

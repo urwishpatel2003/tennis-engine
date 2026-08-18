@@ -203,6 +203,25 @@ def _archive_context(title: str, tour: str) -> dict:
 MIN_EDGE_SIGMA = 1.96
 CALIBRATION_BAND_N = 300.0
 
+# The page will not name a bet on a player the model expects to LOSE this badly,
+# whatever the arithmetic says.
+#
+# Two reasons, and the second is the one that matters.
+#
+# Precision: how well a probability is known, RELATIVE to its own size, collapses
+# at long odds. The standard error is sqrt(p(1-p)/n), so at p=0.09 it is 1.65pp -
+# 18% of the estimate itself - while at p=0.50 it is 6%. Requiring the error to
+# be at most a tenth of the estimate gives 1-p <= 3p, i.e. p >= 0.25 exactly.
+# Below that the model simply does not resolve a probability finely enough for a
+# two-point disagreement with the market to mean anything.
+#
+# Communication: a row reading "Back Diane Parry" is read as a prediction, and
+# the model is predicting the exact opposite - it gives her 9% and expects her to
+# lose about ten times in eleven. Being technically a positive-expectation claim
+# does not rescue a line that tells the reader the opposite of what the model
+# believes. That was the actual complaint, and it was the right complaint.
+MIN_RECOMMEND_PROB = 0.25
+
 
 # Last price seen for a fixture BEFORE it started, kept so a match can stay on
 # the page once play begins without its odds turning into in-play ones.
@@ -472,14 +491,16 @@ def fixtures(
                 edge_pp = abs(prob - (mkt_a if side == "A" else mkt_b))
                 need_pp = MIN_EDGE_SIGMA * math.sqrt(
                     max(prob * (1.0 - prob), 1e-9) / CALIBRATION_BAND_N)
+                too_long = prob < MIN_RECOMMEND_PROB
                 print(f"[bet] {row['player_a']} v {row['player_b']}: "
                       f"pick {who} @{odds} model {prob*100:.2f}% "
                       f"mkt {(mkt_a if side=='A' else mkt_b)*100:.2f}% "
                       f"EV {ev*100:+.1f}% edge {edge_pp*100:.2f}pp "
                       f"need {need_pp*100:.2f}pp -> "
-                      f"{'BET' if (ev > 0 and odds > 1 and edge_pp >= need_pp) else 'declined'}",
+                      f"{'BET' if (ev > 0 and odds > 1 and edge_pp >= need_pp and not too_long) else 'declined'}"
+                      + (" (long shot)" if too_long else ""),
                       flush=True)
-                if ev > 0 and odds > 1 and edge_pp >= need_pp:
+                if ev > 0 and odds > 1 and edge_pp >= need_pp and not too_long:
                     # Quarter Kelly. Full Kelly on a model whose edge is
                     # unproven is how a bankroll disappears, and this model has
                     # NOT beaten the market out of sample - see the module
@@ -496,6 +517,9 @@ def fixtures(
                     row["bet"] = None
                     row["no_bet_reason"] = (
                         "book price is fair or short" if ev <= 0 else
+                        f"the model expects {who} to lose "
+                        f"({prob*100:.0f}% to win) - too long a shot to price"
+                        if too_long else
                         f"disagreement {edge_pp*100:.1f}pts is inside the "
                         f"{need_pp*100:.1f}pts we can actually measure"
                     )

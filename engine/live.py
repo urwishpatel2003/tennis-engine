@@ -472,6 +472,13 @@ def fixtures(
                 edge_pp = abs(prob - (mkt_a if side == "A" else mkt_b))
                 need_pp = MIN_EDGE_SIGMA * math.sqrt(
                     max(prob * (1.0 - prob), 1e-9) / CALIBRATION_BAND_N)
+                print(f"[bet] {row['player_a']} v {row['player_b']}: "
+                      f"pick {who} @{odds} model {prob*100:.2f}% "
+                      f"mkt {(mkt_a if side=='A' else mkt_b)*100:.2f}% "
+                      f"EV {ev*100:+.1f}% edge {edge_pp*100:.2f}pp "
+                      f"need {need_pp*100:.2f}pp -> "
+                      f"{'BET' if (ev > 0 and odds > 1 and edge_pp >= need_pp) else 'declined'}",
+                      flush=True)
                 if ev > 0 and odds > 1 and edge_pp >= need_pp:
                     # Quarter Kelly. Full Kelly on a model whose edge is
                     # unproven is how a bankroll disappears, and this model has

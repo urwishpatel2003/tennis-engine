@@ -166,7 +166,14 @@ def _clean(obj):
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return send_from_directory(HERE, "dashboard.html")
+    # no-store, not merely no-cache. The dashboard is a single HTML file holding
+    # all its own JavaScript, so a browser holding an old copy shows old columns
+    # and old decision rules while the server has already been fixed - which is
+    # indistinguishable, from the outside, from the fix not working.
+    resp = send_from_directory(HERE, "dashboard.html")
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @app.route("/api/health")

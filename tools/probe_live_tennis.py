@@ -140,30 +140,66 @@ def main() -> None:
         else:
             print(f"  {str(body)[:220]}")
 
-    # 3. The question that decides whether this feed is usable at all: are FINAL
-    #    serve statistics available for a match that has already finished? The
-    #    published tool is called "In-Play Statistics", which may mean live only.
-    #    Without final stats the engine's serve/return model gains nothing.
-    print(f"\n{'='*70}\nFINAL STATS FOR A COMPLETED MATCH (the decisive question)")
-    status, body = call("/matches?status=completed", build(key))
-    mid = None
-    if status == 200:
-        items = body.get("data") if isinstance(body, dict) else body
-        if isinstance(items, list) and items:
-            first = items[0]
-            for k in ("id", "match_id", "matchId", "uuid"):
-                if isinstance(first, dict) and first.get(k):
-                    mid = first[k]
-                    break
-            print(f"  sample completed match keys: {list(first)[:20]}")
-    if mid is None:
-        print("  could not find a completed match id — inspect the dump above")
+    # 3. The question that decides whether this feed is worth paying for: does
+    #    it carry the serve statistics the point model needs — aces, double
+    #    faults, the first/second serve split, break points?
+    #
+    #    Paging COMPLETED matches is gated behind the BASIC tier, so that route
+    #    is closed on a free key. But a LIVE match is visible, and if a live
+    #    match exposes the full serve-stat set then a finished one almost
+    #    certainly carries the final version of the same fields. That answers
+    #    the question for the price of nothing, which is the right order: verify
+    #    before recommending a subscription, not after.
+    print(f"
+{'='*70}
+SERVE STATISTICS — probed on a LIVE singles match")
+    status, body = call("/matches?tour=atp", build(key))
+    if status != 200:
+        status, body = call("/matches?tour=wta", build(key))
+    items = body.get("data") if isinstance(body, dict) else None
+    if not items:
+        print("  no live matches available right now — re-run during play")
         return
-    for path in (f"/matches/{mid}/statistics", f"/matches/{mid}/stats", f"/matches/{mid}"):
+
+    singles = [m for m in items if not m.get("is_doubles")] or items
+    m = singles[0]
+    mid = m.get("id")
+    print(f"  match {mid}: {m.get('tournament')} {m.get('round_code')} "
+          f"status={m.get('status')} doubles={m.get('is_doubles')}")
+
+    # The full match object first — the statistics may simply be nested in it.
+    print("
+  --- players / score sub-objects (shape only) ---")
+    for field in ("players", "score"):
+        if isinstance(m.get(field), (dict, list)):
+            print(f"  {field}:")
+            print(shape(m[field], depth=2))
+
+    for path in (f"/matches/{mid}", f"/matches/{mid}/statistics",
+                 f"/matches/{mid}/stats", f"/matches/{mid}/summary",
+                 f"/statistics?match_id={mid}"):
         status, body = call(path, build(key))
-        print(f"\n  {path} -> HTTP {status}")
+        print(f"
+  {path} -> HTTP {status}")
+        if status == 200:
+            print(shape(body, depth=1, max_depth=4))
+        else:
+            print(f"     {str(body)[:200]}")
+
+    # Two smaller corrections the first run surfaced, checked while we are here.
+    print(f"
+{'='*70}
+CORRECTIONS FROM THE FIRST RUN")
+    for label, path in [("rankings wants `system`", "/rankings?system=atp"),
+                        ("tournaments filtered by tour", "/tournaments?tour=atp"),
+                        ("upcoming matches", "/matches?status=upcoming&tour=atp")]:
+        status, body = call(path, build(key))
+        print(f"
+  {label}: {path} -> HTTP {status}")
         if status == 200:
             print(shape(body, depth=1))
+        else:
+            print(f"     {str(body)[:180]}")
 
 
 if __name__ == "__main__":

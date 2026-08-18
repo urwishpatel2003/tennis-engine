@@ -329,60 +329,17 @@ def main() -> None:
                   f"   PIT: " + "  ".join(f"{h:.2f}" for h in hist))
             per_q[label][str(bo)] = coefs
 
-    # ── Location and scale, fitted SEPARATELY ────────────────────────────────
-    # The affine map ties them together: one slope both centres the line and
-    # sets the width. Slope 0.73 is what it takes to centre bo3 totals, and it
-    # then shrinks the whole distribution by 0.73 — which is why the right tail
-    # came up short (PIT 0.31 in the top bin). Splitting them keeps the centring
-    # and lets the width go where the data wants:
-    #
-    #     calibrated = centre + spread · (raw − raw_median)
-    #
-    # `centre` is the affine median fit already validated above, so this costs
-    # exactly ONE extra constant per format.
-    print("\n  LOCATION-SCALE FIT — centre from the median fit, width fitted free")
-    spreads: dict[str, dict[str, float]] = {"total": {}, "margin": {}}
-    for bo in (3, 5):
-        sub = cache[cache["best_of"] == bo].reset_index(drop=True)
-        if len(sub) < 400:
-            continue
-        tr = sub.index % 2 == 1
-        te = ~tr
-        for label, prefix, acol in (("total", "qt", "actual_total"),
-                                    ("margin", "qm", "actual_margin")):
-            y = sub[acol].to_numpy(dtype=float)
-            Q = sub[[f"{prefix}_{t:.2f}" for t in TAUS]].to_numpy(dtype=float)
-            q50 = Q[:, int(np.argmin(np.abs(TAUS - 0.5)))]
-            a, b = fitted[label][str(bo)]
-            centre = a * q50 + b
-
-            def pit_for(s, m):
-                cal = centre[m][:, None] + s * (Q[m] - q50[m][:, None])
-                return (cal < y[m][:, None]).sum(axis=1) / Q.shape[1]
-
-            # Uniformity, scored as chi-square of a 10-bin PIT histogram. Fitted
-            # on the training half only; the number printed is the OTHER half.
-            best_s, best_chi = 1.0, float("inf")
-            for s in np.arange(0.4, 2.61, 0.02):
-                h = np.histogram(pit_for(s, tr), bins=10, range=(0, 1))[0]
-                exp = h.sum() / 10.0
-                chi = ((h - exp) ** 2 / exp).sum()
-                if chi < best_chi:
-                    best_s, best_chi = float(s), chi
-            u = pit_for(best_s, te)
-            hist = np.histogram(u, bins=5, range=(0, 1))[0] / max(te.sum(), 1)
-            h10 = np.histogram(u, bins=10, range=(0, 1))[0]
-            chi_te = ((h10 - h10.sum() / 10.0) ** 2 / (h10.sum() / 10.0)).sum()
-            print(f"  bo{bo} {label:<7} spread {best_s:.2f}   PIT OOS: "
-                  + "  ".join(f"{h:.2f}" for h in hist)
-                  + f"   chi2 {chi_te:7.1f}")
-            spreads[label][str(bo)] = round(best_s, 3)
-    print("  SPREAD_CALIBRATION = " + json.dumps(spreads))
+    # The separate location-scale exploration that used to sit here has been
+    # folded into the main loop above, which now fits the width per (tour,
+    # best_of) alongside the centre. Keeping a second copy that fitted it POOLED
+    # meant the file printed two different answers for the same constant, and
+    # the pooled one was the wrong one.
 
     out = Path(__file__).resolve().parent.parent / "reports" / "score_calibration.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(
-        {"affine": fitted, "per_quantile": per_q, "grid": [float(g) for g in grid]},
+        {"centre": fitted, "spread": spreads, "rejected_per_quantile": per_q,
+         "grid": [float(g) for g in grid]},
         indent=1), encoding="utf-8")
     print(f"\n  full fit written to reports/{out.name}")
 

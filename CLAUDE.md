@@ -241,7 +241,7 @@ not score should be assumed wrong until a tool grades it.
 Deployed on Railway via the CLI (`railway up`), same as the NFL engine — the repo
 is NOT connected to Railway, so a `git push` alone does not deploy.
 
-**The data is built at BUILD TIME, and there is no Volume.** This is the one
+**The data is built at BUILD TIME.** A Volume exists but holds only runtime state, never the archive. This is the one
 significant difference from the NFL engine, and it is deliberate:
 
 - The dev machine's proxy 404s `raw.githubusercontent.com`, so the real archive
@@ -349,3 +349,21 @@ and fetch a control URL on the same host that you know exists.
 - Paths always derive from `Path(__file__).parent` — keep it relocatable.
 - Engine modules carry a `sys.path` bootstrap so both `python engine/x.py` and
   `python -m engine.x` work.
+
+## Runtime state and the Volume
+
+A Railway Volume is mounted at **`/app/state`** (5 GB, `tennis-engine-volume`). It
+holds only what the SERVICE writes at runtime:
+
+- `bet_log.jsonl` — every bet the Today page has recommended (`BET_LOG_PATH`)
+- `prematch_odds.json` — the last price quoted for a fixture before it started
+  (`ODDS_SNAPSHOT_PATH`)
+
+**Do not mount a volume at `/app/data`.** The archive is built into the image
+there (`/app/data/raw`, `/app/data/processed`), and a volume on that path would
+shadow every parquet and leave the service with no data at all. `/app/state` is
+deliberately separate for that reason.
+
+The build still produces the archive, so the Volume is not a data store and
+nothing in it is required for the dashboard to serve predictions — losing it
+would cost the betting record and the frozen odds, nothing else.

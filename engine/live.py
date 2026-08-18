@@ -204,6 +204,46 @@ MIN_EDGE_SIGMA = 1.96
 CALIBRATION_BAND_N = 300.0
 
 
+# Last price seen for a fixture BEFORE it started, kept so a match can stay on
+# the page once play begins without its odds turning into in-play ones.
+#
+# In-play is a different market, not a fresher version of the same one. Pricing a
+# model probability computed for the START of a match against a price that
+# already knows the first set is how this project once produced a +468% edge -
+# the number was arithmetic on two incompatible things.
+#
+# Stored beside the bet log so it survives a redeploy; without that, every deploy
+# would lose the pre-match prices of everything currently being played.
+_SNAP_PATH = Path(os.environ.get(
+    "ODDS_SNAPSHOT_PATH",
+    str(Path(os.environ.get("BET_LOG_PATH", "data/processed/bet_log.jsonl")).parent
+        / "prematch_odds.json")))
+_snapshots: dict | None = None
+
+
+def _snap_key(tour: str, a: str, b: str, start) -> str:
+    x, y = sorted([norm_name(a), norm_name(b)])
+    return f"{tour}|{x}|{y}|{str(start)[:10]}"
+
+
+def _load_snapshots() -> dict:
+    global _snapshots
+    if _snapshots is None:
+        try:
+            _snapshots = json.loads(_SNAP_PATH.read_text(encoding="utf-8"))
+        except Exception:      # noqa: BLE001 - absent or unreadable is just empty
+            _snapshots = {}
+    return _snapshots
+
+
+def _save_snapshots() -> None:
+    try:
+        _SNAP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _SNAP_PATH.write_text(json.dumps(_load_snapshots()), encoding="utf-8")
+    except Exception as e:     # noqa: BLE001 - never break a page over a cache
+        print(f"[odds] could not persist pre-match snapshot: {e}", flush=True)
+
+
 def devig(price_a: float, price_b: float) -> tuple[float, float]:
     """Proportional de-vig of a two-way decimal market."""
     if not price_a or not price_b or price_a <= 1 or price_b <= 1:
@@ -265,7 +305,7 @@ def fixtures(
     eng: Engine | None = None,
     tours: tuple[str, ...] = ("atp", "wta"),
     blend_market: bool = False,
-    include_started: bool = False,
+    include_started: bool = True,
 ) -> dict:
     """
     Every posted fixture, priced by the model and compared to the market.
@@ -310,7 +350,8 @@ def fixtures(
         for ev in _events(t["key"]):
             events_seen += 1
             start = pd.to_datetime(ev.get("commence_time"), utc=True, errors="coerce")
-            if pd.notna(start) and start <= now and not include_started:
+            has_started = bool(pd.notna(start) and start <= now)
+            if has_started and not include_started:
                 started += 1
                 continue
             cons = _consensus(ev)
@@ -326,6 +367,31 @@ def fixtures(
 
             pa = cons["prices"].get(a_name)
             pb = cons["prices"].get(b_name)
+
+            # Freeze the price at the last one seen BEFORE the match started.
+            #
+            # A started match stays on the page - it is still the fixture you
+            # were looking at - but its price must not become an in-play one.
+            # The model's probability is computed for a match at 0-0, and an
+            # in-play price already knows the score; comparing them is what once
+            # produced a +468% "edge" out of two incompatible numbers.
+            snaps = _load_snapshots()
+            skey = _snap_key(t["tour"], a_name, b_name, start)
+            odds_frozen = False
+            if has_started:
+                snap = snaps.get(skey)
+                if snap:
+                    pa, pb = snap.get("odds_a"), snap.get("odds_b")
+                    odds_frozen = True
+                else:
+                    # Never seen before it began, so there is no honest price to
+                    # show. The row still appears; it simply carries no market.
+                    pa = pb = None
+            elif pa and pb:
+                snaps[skey] = {"odds_a": pa, "odds_b": pb,
+                               "captured_at": str(now), "commence_time": str(start)}
+                _save_snapshots()
+
             mkt_a, mkt_b = devig(pa, pb)
 
             try:
@@ -360,6 +426,8 @@ def fixtures(
                 "books": cons["books"],
                 "odds_a": pa, "odds_b": pb,
                 "ratings_stale_days": staleness.get(t["tour"], {}).get("stale_days"),
+                "started": has_started,
+                "odds_frozen": odds_frozen,
             }
             if mkt_a == mkt_a:  # not NaN
                 row.update({

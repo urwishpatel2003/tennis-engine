@@ -557,7 +557,9 @@ async function viewToday(){
                 : `<span class="dim">no bet — ${r.no_bet_reason||'book price is fair or short'}</span>`);
           return `<tr class="click" data-go="${link}">
             <td class="l dim">${t}</td>
-            <td class="l"><strong>${r.player_a}</strong> v ${r.player_b}</td>
+            <td class="l"><strong>${r.player_a}</strong> v ${r.player_b}${
+              r.started?` <span class="dim" title="This match is under way. Its price is the last one quoted BEFORE it started - in-play odds already know the score, and the model's number does not, so comparing them is meaningless.">· in progress${
+                r.odds_frozen?', price frozen':', no pre-match price captured'}</span>`:''}</td>
             <td>${pct(r.model_prob_a)}<br><span class="dim">fair ${num(r.fair_odds_a,2)}</span></td>
             <td>${r.odds_a==null?'—':num(r.odds_a,2)}<br><span class="dim">${
               r.market_prob_a==null?'':pct(r.market_prob_a)}</span></td>
@@ -582,6 +584,10 @@ async function viewToday(){
         apparent return. Most matches will say no bet, and that is the normal
         outcome, not a fault.
         <em>Stake</em> is quarter Kelly on the model's own number.
+        Matches already under way stay listed, showing the last price quoted
+        BEFORE they started. In-play odds are deliberately not used: they already
+        know the score and the model's number does not, and comparing the two is
+        what once produced a +468% phantom edge here.
         <br><br>
         <strong>What this is not.</strong> A "Back X" row means the model disagrees
         with the price, not that money is expected. Tested out of sample, this model

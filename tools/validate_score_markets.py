@@ -98,12 +98,17 @@ def main() -> None:
     actual_margin = games_a - games_b
     actual_total = df["total_games"].to_numpy().astype(float)
 
-    fair_hcap = np.zeros(len(df))
-    fair_total = np.zeros(len(df))
+    # Both line rules are graded in the SAME pass. Rebuilding 12,000 Markov
+    # distributions is the expensive part and it is identical for both, so
+    # comparing them across two runs would cost twice as much and invite an
+    # apples-to-oranges slip if anything else changed in between.
+    RULES = ("centre", "best")
+    fair_hcap = {r: np.zeros(len(df)) for r in RULES}
+    fair_total = {r: np.zeros(len(df)) for r in RULES}
+    p_cover = {r: np.zeros(len(df)) for r in RULES}
+    p_over = {r: np.zeros(len(df)) for r in RULES}
     exp_margin = np.zeros(len(df))
     exp_total = np.zeros(len(df))
-    p_cover = np.zeros(len(df))
-    p_over = np.zeros(len(df))
 
     for i in range(len(df)):
         pa, pb = point_probabilities(a_s[i], a_r[i], b_s[i], b_r[i], tour[i], surf[i])
@@ -120,26 +125,41 @@ def main() -> None:
         # re-implemented the line choice and was grading a function the engine
         # does not have; anything measured here has to come from engine/.
         margins = score_calib.margin_distribution(g)
-        fair_hcap[i] = -score_calib.fair_line(margins, "margin", int(bo[i]))
-        raw_thresh = score_calib.uncalibrate(
-            -fair_hcap[i], margins, "margin", int(bo[i]))
-        p_cover[i] = markov.prob_cover_handicap(g, -raw_thresh)
-
         totals = markov.total_games_distribution(g)
-        fair_total[i] = score_calib.fair_line(totals, "total", int(bo[i]))
-        p_over[i] = markov.prob_over_games(
-            g, score_calib.uncalibrate(fair_total[i], totals, "total", int(bo[i])))
+        for r in RULES:
+            h = -score_calib.fair_line(margins, "margin", tour[i], int(bo[i]), rule=r)
+            fair_hcap[r][i] = h
+            raw_thresh = score_calib.uncalibrate(
+                -h, margins, "margin", tour[i], int(bo[i]))
+            p_cover[r][i] = markov.prob_cover_handicap(g, -raw_thresh)
 
-    print("  1. FAIR HANDICAP — does A cover it half the time?")
-    covered = (actual_margin + fair_hcap) > 0
-    print(f"     model says 50%, actual {covered.mean()*100:.1f}%   "
-          f"(stated P(cover) averaged {p_cover.mean()*100:.1f}%)")
+            t = score_calib.fair_line(totals, "total", tour[i], int(bo[i]), rule=r)
+            fair_total[r][i] = t
+            p_over[r][i] = markov.prob_over_games(
+                g, score_calib.uncalibrate(t, totals, "total", tour[i], int(bo[i])))
 
-    print("\n  2. FAIR TOTAL — does the match go over it half the time?")
-    over = actual_total > fair_total
-    push = actual_total == fair_total
-    print(f"     model says 50%, actual {over.mean()*100:.1f}%   "
-          f"(stated P(over) averaged {p_over.mean()*100:.1f}%, {push.sum()} pushes)")
+    # The line is what the user acts on, so it is graded against what ACTUALLY
+    # happened. The stated probability sits beside it because the two
+    # disagreeing was the original defect — a rule can centre one and miss the
+    # other, and only showing both makes that visible.
+    print("  1+2. DO THE FAIR LINES SPLIT 50/50?   (* = shipped rule)")
+    print(f"     {'rule':<10}{'handicap':>10}{'stated':>9}"
+          f"{'total':>10}{'stated':>9}{'pushes':>8}")
+    graded = {}
+    for r in RULES:
+        cov = (actual_margin + fair_hcap[r]) > 0
+        ov = actual_total > fair_total[r]
+        graded[r] = (cov, ov)
+        mark = "*" if r == score_calib.LINE_RULE else " "
+        print(f"   {mark} {r:<8}{cov.mean()*100:>9.1f}%{p_cover[r].mean()*100:>8.1f}%"
+              f"{ov.mean()*100:>9.1f}%{p_over[r].mean()*100:>8.1f}%"
+              f"{int((actual_total == fair_total[r]).sum()):>8}")
+
+    covered, over = graded[score_calib.LINE_RULE]
+    fair_hcap, fair_total = (fair_hcap[score_calib.LINE_RULE],
+                             fair_total[score_calib.LINE_RULE])
+    p_cover, p_over = (p_cover[score_calib.LINE_RULE],
+                       p_over[score_calib.LINE_RULE])
 
     print("\n  3. GAME MARGIN")
     print(f"     MAE {np.mean(np.abs(exp_margin-actual_margin)):.3f}   "
@@ -158,14 +178,20 @@ def main() -> None:
         print(f"     {edges[j]:.2f}-{edges[j+1]:.2f}{m.sum():>8}"
               f"{over[m].mean():>10.3f}{over[m].mean()-p_over[m].mean():>+9.3f}")
 
-    print("\n  by format:")
-    for b in (3, 5):
-        m = bo == b
-        if m.sum() < 200:
-            continue
-        print(f"     best-of-{b}  n={m.sum():>6}  handicap cover {covered[m].mean()*100:5.1f}%"
-              f"   over {over[m].mean()*100:5.1f}%"
-              f"   total bias {np.mean(exp_total[m]-actual_total[m]):+.2f}")
+    # Split by TOUR as well as format. A pooled number hides a real problem: with
+    # one shared best-of-3 totals constant the ATP went over 52.8% and the WTA
+    # 48.0%, averaging to a healthy-looking 50.4% that was correct for neither.
+    # Any aggregate here should be read alongside this table, not instead of it.
+    print("\n  by tour and format:")
+    for t in ("atp", "wta"):
+        for b in (3, 5):
+            m = (tour == t) & (bo == b)
+            if m.sum() < 200:
+                continue
+            print(f"     {t.upper()} best-of-{b}  n={m.sum():>6}"
+                  f"  handicap cover {covered[m].mean()*100:5.1f}%"
+                  f"   over {over[m].mean()*100:5.1f}%"
+                  f"   total bias {np.mean(exp_total[m]-actual_total[m]):+.2f}")
 
 
 if __name__ == "__main__":

@@ -154,7 +154,7 @@ The same blind spot covers the **score markets**. `backtest.py` scores win
 probability only, so `fair_total_games_line` and `fair_game_handicap_a` — both on
 the Today tab and every matchup page — went unmeasured until
 `tools/validate_score_markets.py` replayed 10,000 matches and found the fair total
-going over just 42% of the time. Anything the model outputs but the backtest does
+going over just 42% of the time (now 49.4%). Anything the model outputs but the backtest does
 not score should be assumed wrong until a tool grades it.
 
 ## Gotchas

@@ -600,9 +600,9 @@ def predict_from_states(
     # The LINE is a median and needs its own calibration — see engine/score_calib.
     # It used to go through calibrate_total_games, which is fitted on the mean,
     # and the result went over only 42% of the time.
-    fair_total = score_calib.fair_line(totals, "total", best_of)
+    fair_total = score_calib.fair_line(totals, "total", tour, best_of)
     margins = score_calib.margin_distribution(sim["games"])
-    fair_handicap = -score_calib.fair_line(margins, "margin", best_of)
+    fair_handicap = -score_calib.fair_line(margins, "margin", tour, best_of)
 
     top_scorelines = sorted(
         sim.get("scorelines", {}).items(), key=lambda kv: -kv[1]

@@ -157,10 +157,18 @@ question a "fair" line actually promises: does each side win half the time?
 
 | | before | after |
 |---|---|---|
-| fair total goes over | 42.0% | **50.4%** |
-| fair handicap covers | 48.1% | **49.7%** |
-| worst gap in stated P(over) | −8.3pp | **−1.2pp** |
+| fair total goes over | 42.0% | **49.4%** |
+| fair handicap covers | 48.1% | **50.6%** |
+| worst gap in stated P(over) | −8.3pp | **+1.0pp** |
 | pushes (line landed on a whole number) | 403 | **0** |
+
+Per tour and format, which is the honest way to read it:
+
+| | handicap covers | total goes over |
+|---|---|---|
+| ATP best-of-3 | 50.3% | 49.5% |
+| ATP best-of-5 | 49.9% | 50.0% |
+| WTA best-of-3 | 51.0% | 49.1% |
 
 The cause was a category error, not a bad constant: `calibrate_total_games` is
 fitted on the *expectation* of total games and was being applied to the *median*
@@ -168,7 +176,20 @@ that the line is derived from. `engine/score_calib.py` now calibrates centre and
 width as two separate parameters — the single-slope map had to use one number for
 both, and the 0.73 slope needed to centre the line was also shrinking the
 distribution's width by 0.73, cutting the right tail short. Fitted freely, the
-width comes out at 0.98: the chain's dispersion was right all along.
+width comes out at 1.00: the chain's dispersion was right all along.
+
+The constants are keyed by tour, because pooling them hid the problem rather than
+solving it: a single best-of-3 totals constant sent the ATP over 52.8% of the time
+and the WTA 48.0%, averaging to a respectable 50.4% that described neither.
+
+One further choice was settled by measurement rather than argument. A fair line
+can be anchored to **reality** (the centre fitted by quantile regression against
+actual outcomes) or to the **model** (the half-point its own calibrated
+distribution splits evenly). Graded head to head over the same 12,000 matches,
+the model-anchored rule produced perfectly centred *stated* probabilities
+(50.0%/50.0%) but worse *actual* lines (51.7%/51.0%) — it inherits whatever the
+chain's shape gets wrong. Reality-anchored ships; `LINE_RULE` keeps both so the
+comparison stays reproducible.
 
 One thing this deliberately does not fix. Real total-games is more right-skewed
 than the model's — many straight-sets matches, then a long thin tail — and a

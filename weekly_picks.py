@@ -138,13 +138,13 @@ def evaluate_match(
     # real scale, so it has to be mapped back before a probability is read off
     # it. Reading it raw overstated P(over) on every totals market and biased
     # this layer toward backing the over.
-    bo = p["best_of"]
+    bo, tr = p["best_of"], p["tour"]
     tl = _num(row.get("total_line"))
     if np.isfinite(tl):
         out["total_line"] = tl
         totals = total_games_distribution(p["_games_joint"])
         out["prob_over"] = prob_over_games(
-            p["_games_joint"], score_calib.uncalibrate(tl, totals, "total", bo)
+            p["_games_joint"], score_calib.uncalibrate(tl, totals, "total", tr, bo)
         )
     hl = _num(row.get("handicap_a"))
     if np.isfinite(hl):
@@ -152,7 +152,7 @@ def evaluate_match(
         # A covers iff margin > -hl, so the THRESHOLD is what gets mapped back;
         # the handicap is its negation on the raw scale.
         margins = score_calib.margin_distribution(p["_games_joint"])
-        raw_thresh = score_calib.uncalibrate(-hl, margins, "margin", bo)
+        raw_thresh = score_calib.uncalibrate(-hl, margins, "margin", tr, bo)
         out["prob_cover_a"] = prob_cover_handicap(p["_games_joint"], -raw_thresh)
 
     return out

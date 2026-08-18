@@ -284,15 +284,18 @@ async function viewLive(){
 
   let timer = null;
 
-  function bar(p, a, b, swing){
+  function bar(p, a, b, swing, prematch){
     const wa = Math.max(2, Math.min(98, p*100));
     const sw = swing>=0 ? 'up' : 'down';
+    // `prematch` is passed in rather than derived. An earlier version wrote
+    // 1-swing-p+swing, which is just 1-p - the OPPONENT's live number, labelled
+    // as the pre-match one. It looked entirely plausible on screen.
     return `
       <div class="names"><span>${a}</span><span>${b}</span></div>
       <div class="bigbar"><div class="ba" style="width:${wa}%">${pct(p)}</div>
         <div class="bb" style="width:${100-wa}%">${pct(1-p)}</div></div>
       <div class="names muted"><span class="${sw}">${swing>=0?'+':''}${(swing*100).toFixed(1)} pts vs pre-match</span>
-        <span>pre-match ${pct(1-swing-p+swing)}</span></div>`;
+        <span>was ${pct(prematch)} before a ball was struck</span></div>`;
   }
 
   function render(d){
@@ -323,7 +326,7 @@ async function viewLive(){
             ${surf(r.surface)} ${r.tournament||''} · ${r.round||''} · best of ${r.best_of}
             · serving: ${srv}${stale}
           </div>
-          ${bar(r.live_a, r.player_a, r.player_b, r.swing_a)}
+          ${bar(r.live_a, r.player_a, r.player_b, r.swing_a, r.prematch_a)}
           <div class="grid" style="margin-top:12px">
             <div class="stat"><div class="k">Score</div>
               <div class="v">${r.scoreline||'—'}</div>

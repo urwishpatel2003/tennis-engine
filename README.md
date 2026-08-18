@@ -146,6 +146,40 @@ Per tournament, the same engine replayed over completed draws:
 Grass being the hardest to predict is a real, well-known property of the surface,
 not an artefact — short points and big serving compress the skill gap.
 
+### Score markets
+
+Everything above scores the win probability. The **fair total** and **fair
+handicap** are separate outputs, they appear on every matchup page, and for a long
+time nothing graded them — `backtest.py` does not look at scorelines at all.
+
+`tools/validate_score_markets.py` replays 10,000 completed matches and asks the one
+question a "fair" line actually promises: does each side win half the time?
+
+| | before | after |
+|---|---|---|
+| fair total goes over | 42.0% | **50.4%** |
+| fair handicap covers | 48.1% | **49.7%** |
+| worst gap in stated P(over) | −8.3pp | **−1.2pp** |
+| pushes (line landed on a whole number) | 403 | **0** |
+
+The cause was a category error, not a bad constant: `calibrate_total_games` is
+fitted on the *expectation* of total games and was being applied to the *median*
+that the line is derived from. `engine/score_calib.py` now calibrates centre and
+width as two separate parameters — the single-slope map had to use one number for
+both, and the 0.73 slope needed to centre the line was also shrinking the
+distribution's width by 0.73, cutting the right tail short. Fitted freely, the
+width comes out at 0.98: the chain's dispersion was right all along.
+
+One thing this deliberately does not fix. Real total-games is more right-skewed
+than the model's — many straight-sets matches, then a long thin tail — and a
+location-scale correction has no skew parameter. So the **fair line sits below the
+expected total**, and totals carry two calibrations on purpose. The game margin is
+near-symmetric and needs only one.
+
+Constants are fitted by `tools/fit_score_calibration.py` on an odd/even split and
+scored on the held-out half. A per-quantile fit was tried and rejected: it did not
+improve the 50/50 rate and made the distribution's shape worse.
+
 ### Recovering known truth
 
 `tools/validate_recovery.py` runs against the synthetic generator, where the

@@ -38,7 +38,12 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from engine.markov import prob_cover_handicap, prob_over_games  # noqa: E402
+from engine import score_calib  # noqa: E402
+from engine.markov import (  # noqa: E402
+    prob_cover_handicap,
+    prob_over_games,
+    total_games_distribution,
+)
 from engine.predict import Engine  # noqa: E402
 from engine.schema import PROCESSED, SURFACES  # noqa: E402
 
@@ -128,14 +133,27 @@ def evaluate_match(
         out["best_ev"] = np.nan
 
     # Optional games markets, if lines were supplied.
+    # `_games_joint` is the RAW Markov distribution, which runs long and is
+    # slightly too even (see engine/score_calib). A bookmaker's line is on the
+    # real scale, so it has to be mapped back before a probability is read off
+    # it. Reading it raw overstated P(over) on every totals market and biased
+    # this layer toward backing the over.
+    bo = p["best_of"]
     tl = _num(row.get("total_line"))
     if np.isfinite(tl):
         out["total_line"] = tl
-        out["prob_over"] = prob_over_games(p["_games_joint"], tl)
+        totals = total_games_distribution(p["_games_joint"])
+        out["prob_over"] = prob_over_games(
+            p["_games_joint"], score_calib.uncalibrate(tl, totals, "total", bo)
+        )
     hl = _num(row.get("handicap_a"))
     if np.isfinite(hl):
         out["handicap_a_line"] = hl
-        out["prob_cover_a"] = prob_cover_handicap(p["_games_joint"], hl)
+        # A covers iff margin > -hl, so the THRESHOLD is what gets mapped back;
+        # the handicap is its negation on the raw scale.
+        margins = score_calib.margin_distribution(p["_games_joint"])
+        raw_thresh = score_calib.uncalibrate(-hl, margins, "margin", bo)
+        out["prob_cover_a"] = prob_cover_handicap(p["_games_joint"], -raw_thresh)
 
     return out
 

@@ -80,11 +80,18 @@ python tests/test_pipeline.py
   - `markov.py` — the scoring maths. Exact Barnett-Clarke point→game→tiebreak→set→match.
   - `predict.py` — the heart. Blends the two views and reconciles the score model.
   - `ratings.py`, `serve_return.py`, `conditions.py`, `matchups.py` — build steps.
+  - `score_calib.py` — the ONLY place a fair line is decided. Read it before
+    touching totals or handicaps.
   - `schema.py` — paths, vocabularies, tour baselines, score-string parsing.
 - `data/raw/` — fetched source parquets. `data/processed/` — built model outputs.
 - `dashboard/` — Flask `server.py` + hash-routed SPA `dashboard.html`.
 - `tools/make_synthetic_data.py` — generates a schema-compatible fake archive.
 - `tools/validate_recovery.py` — checks the engine recovers known latent truth.
+- `tools/validate_adjustments.py` — measures the per-query Elo adjustments that
+  `backtest.py` never sees (conditions, head-to-head, style).
+- `tools/validate_score_markets.py` — replays completed matches and asks whether a
+  "fair" line is actually fair. `tools/fit_score_calibration.py` fits the constants
+  it grades.
 - `engine/tournament.py` — draws, per-match predictions from FROZEN pre-match state,
   bracket reconstruction and title odds. Shares `predict_from_states` with the live
   predictor so the two can never drift apart.
@@ -132,19 +139,38 @@ conditions (fatigue/rest/home), head-to-head or height/style adjustments, becaus
 those live in `predict.py` and are applied per-query rather than stored per-match.
 So the reported log loss validates the core, not the adjustment layer.
 
-Those adjustments are therefore held to *reasoning*, not measurement, and their
-magnitudes are deliberately conservative. If you want to validate them, extend
-`score_frame()` to reconstruct them from `conditions.parquet` and `h2h.parquet` —
-both are keyed by `match_id` and already leak-free. Until then, treat any change
-to their constants as unvalidated.
+`tools/validate_adjustments.py` closes that gap separately, rebuilding each
+adjustment from the same frozen tables and reporting the multiplier that would be
+optimal. Running it retired two terms outright — fatigue and short rest measured
+*backwards*, and handedness measured as noise — and rescaled two more. Do not
+change a constant in `conditions.py` or `matchups.py` without re-running it.
 
 A concrete instance of why that matters: head-to-head originally used a prior of 6
 with the full ~695 Elo-per-probability conversion, which turned a single 1-0
 meeting into a +47 Elo swing — larger than most rating gaps. It backtested exactly
 the same as the fixed version, because the backtest never sees the term.
 
+The same blind spot covers the **score markets**. `backtest.py` scores win
+probability only, so `fair_total_games_line` and `fair_game_handicap_a` — both on
+the Today tab and every matchup page — went unmeasured until
+`tools/validate_score_markets.py` replayed 10,000 matches and found the fair total
+going over just 42% of the time. Anything the model outputs but the backtest does
+not score should be assumed wrong until a tool grades it.
+
 ## Gotchas
 
+- **A mean calibration is not a median calibration.** `predict.calibrate_total_games`
+  is fitted on the EXPECTATION of total games. It was also being applied to the fair
+  LINE, which is a median — and the two do not transfer, because the real totals
+  distribution is more right-skewed than the model's. Totals therefore carry two
+  separate calibrations on purpose: `calibrate_total_games` for the reported
+  expectation, `engine/score_calib.py` for the line and every over/under
+  probability. Expect the fair line to sit *below* the expected total; that gap is
+  the skew, not a bug.
+- **Lines must be strict half-points.** Game counts are integers, so a whole-number
+  line can be hit exactly and those pushes score as losses on one side.
+  `score_calib.fair_line` floors to `x.5`; do not "simplify" it to `round(v*2)/2`,
+  which allows whole numbers back in.
 - **Windows console encoding.** `engine/__init__.py` forces UTF-8 on stdout/stderr
   at import. Without it every CLI dies on its first box-drawing character under
   cp1252. Any new entry point must import something from `engine` before printing.

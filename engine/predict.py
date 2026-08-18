@@ -56,6 +56,7 @@ if __package__ in (None, ""):
 from engine import conditions as cond
 from engine import matchups as mu
 from engine import markov
+from engine import score_calib
 from engine.ratings import SURFACE_BLEND as ELO_SURFACE_BLEND
 from engine.ratings import blended_elo, expected_score
 from engine.schema import (
@@ -596,9 +597,12 @@ def predict_from_states(
     # converts a real-world line back before probabilities are read off it.
     exp_total_raw = sim["exp_total_games"]
     exp_total_cal = calibrate_total_games(exp_total_raw, best_of)
-    fair_total = calibrate_total_games(_fair_total_line(totals), best_of)
-    fair_total = round(fair_total * 2) / 2.0          # keep it on a half-point line
-    fair_handicap = _fair_handicap_line(sim["games"])
+    # The LINE is a median and needs its own calibration — see engine/score_calib.
+    # It used to go through calibrate_total_games, which is fitted on the mean,
+    # and the result went over only 42% of the time.
+    fair_total = score_calib.fair_line(totals, "total", best_of)
+    margins = score_calib.margin_distribution(sim["games"])
+    fair_handicap = -score_calib.fair_line(margins, "margin", best_of)
 
     top_scorelines = sorted(
         sim.get("scorelines", {}).items(), key=lambda kv: -kv[1]
@@ -680,35 +684,11 @@ def _to_decimal(p: float) -> float:
     return round(1.0 / p, 3) if p > 0 else float("inf")
 
 
-def _fair_total_line(totals: dict[int, float]) -> float:
-    """The half-point total-games line closest to a 50/50 split."""
-    if not totals:
-        return float("nan")
-    keys = sorted(totals)
-    cum, best, best_gap = 0.0, keys[0] + 0.5, 1.0
-    for k in keys:
-        cum += totals[k]
-        gap = abs(cum - 0.5)
-        if gap < best_gap:
-            best_gap, best = gap, k + 0.5
-    return best
-
-
-def _fair_handicap_line(games: dict) -> float:
-    """The half-point game handicap for A closest to a 50/50 split."""
-    if not games:
-        return float("nan")
-    margins: dict[int, float] = {}
-    for (ga, gb), p in games.items():
-        margins[ga - gb] = margins.get(ga - gb, 0.0) + p
-    keys = sorted(margins)
-    cum, best, best_gap = 0.0, -(keys[0] - 0.5), 1.0
-    for k in keys:
-        cum += margins[k]
-        gap = abs(cum - 0.5)
-        if gap < best_gap:
-            best_gap, best = gap, -(k + 0.5)
-    return best
+# `_fair_total_line` / `_fair_handicap_line` used to live here. They read the
+# median straight off the RAW distribution and the caller then pushed it through
+# the mean calibration. Both are gone rather than left dead — engine/score_calib
+# is now the only place a fair line is decided, so the two cannot drift apart
+# again. See tools/validate_score_markets.py for the measurement that caught it.
 
 
 # Career matches needed before a rating is trustworthy. 30 is roughly a full

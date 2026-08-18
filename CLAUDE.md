@@ -135,6 +135,16 @@ the comment explaining the *why* next to the number.
   must come from the same reconciled point probabilities. If you compute the games
   line from raw serve rates while reporting a blended probability, they will
   silently disagree. `tests/test_pipeline.py` section 3 guards this.
+- **One match, one price.** Every page that prices a fixture must price it the
+  same. This has broken four times: a fair line disagreeing with its own
+  probability, the live win probability drifting from the headline, the backtest
+  omitting the adjustment layer, and a matchup link dropping the tournament so
+  the event-progress term never fired (49.8% on Today, 56.7% on the matchup
+  page). Each was invisible because both numbers looked plausible alone.
+  `tests/test_page_coherence.py` derives the rule rather than listing it: any
+  argument that CHANGES the price is context every link must carry, so a new
+  adjustment keyed on something new fails the test instead of silently splitting
+  the pages.
 - **The server reads local parquet only.** Nothing in `engine/` or `dashboard/`
   may import anything from `requirements-fetch.txt`.
 

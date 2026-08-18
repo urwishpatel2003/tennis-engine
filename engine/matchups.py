@@ -13,10 +13,11 @@ Two distinct things live here:
    and needs heavy shrinkage, so `h2h_elo_delta` measures the record against what
    the ratings *expected* and keeps only a shrunk fraction of the surprise.
 
-2. **Style interactions.** Handedness and height do not show up in Elo or in the
-   serve/return books, because those are averages over a field that is ~90%
-   right-handed and of average height. A left-hander's advantage is specifically
-   an advantage against right-handers.
+2. **Style interactions.** Height still shifts the serve/return excesses. The
+   handedness term is now ZERO: the left-hander advantage is real in the
+   literature but does not survive measurement here — see LEFTY_VS_RIGHTY_ELO.
+   Both were previously asserted from reasoning; both have now been measured by
+   tools/validate_adjustments.py, and only one survived.
 """
 
 from __future__ import annotations
@@ -57,17 +58,28 @@ from engine.schema import ELO_SCALE, PROCESSED, RAW, TOURS
 # get the magnitude right made the cap bind for every record from 2-0 upward, so
 # a 2-0 and a 10-0 scored identically and the signal went flat. The resulting
 # curve is ~1.6% for 1-0, 3.9% for 3-0, 5.5% for 5-0, capping near 6.5%.
+# Measured at a best multiplier of 0.6 over 34,563 matches, so the strength comes
+# down from 200 to 120. The gain is real but tiny (0.61567 -> 0.61566): once the
+# ratings are in, a pair's history says very little that is not already priced.
 H2H_PRIOR = 8.0
-H2H_ELO_PER_PROB = 200.0
+H2H_ELO_PER_PROB = 120.0
 H2H_MAX_ELO = 45.0        # hard cap; no pairing is worth more than ~6.5% win prob
 H2H_SURFACE_WEIGHT = 1.6  # meetings on the same surface count for more
 H2H_RECENCY_HALFLIFE_YEARS = 3.0  # a 2014 meeting says little about 2026
 
-# Left-handers win marginally more than their ratings imply against right-handers:
-# the serve swings into the right-hander's backhand in the deuce court and out
-# wide in the ad court, and right-handers see it far less often than the reverse.
-# Measured at ~1.0-1.5% on tour; 12 Elo is the low end of that, deliberately.
-LEFTY_VS_RIGHTY_ELO = 12.0
+# The left-hander advantage is well documented in the tennis literature — the
+# serve swings into a right-hander's backhand in the deuce court, and right-handers
+# see it far less often than the reverse. It does NOT show up in this archive.
+#
+# Measured over 34,563 matches (tools/validate_adjustments.py), applying it at 12
+# Elo made log loss slightly WORSE (0.61579 vs 0.61569 baseline) and the best
+# multiplier came out at -0.8. Whatever edge exists is either already inside the
+# ratings — a lefty's results already reflect it — or is too small to survive the
+# noise at this sample size.
+#
+# Set to 0 on that evidence rather than removed, so it is one edit to revisit if a
+# larger or differently-sliced sample ever says otherwise.
+LEFTY_VS_RIGHTY_ELO = 0.0
 
 # Height: tall players serve bigger but return worse. Expressed as a serve/return
 # excess shift per cm away from tour-average height, applied only where it matters

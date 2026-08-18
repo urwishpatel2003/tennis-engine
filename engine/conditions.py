@@ -206,10 +206,43 @@ def build_conditions(matches: pd.DataFrame) -> pd.DataFrame:
 # probability is formed. 25 Elo ≈ 3.5 percentage points at even money — the right
 # order of magnitude for a conditions effect.
 
-FATIGUE_ELO_PER_INDEX = -38.0   # a fully "heavy load" player gives up ~38 Elo
-SHORT_REST_PENALTY = -22.0      # playing back-to-back days
-LONG_LAYOFF_PENALTY = -30.0     # first match back after 60+ days (rust, not fitness)
-HOME_ELO_BONUS = 18.0           # home crowd; smaller than in team sport, but real
+# MEASURED, not reasoned. tools/validate_adjustments.py scores each of these
+# against 34.5k matches with a walk-forward holdout. The first version of this
+# file was hand-tuned and two of its four terms were actively making the model
+# WORSE — the whole conditions block cost 0.0016 log loss.
+#
+# What the measurement found:
+#
+#   fatigue      best multiplier -1.8   BACKWARDS
+#   short rest   best multiplier -2.0   BACKWARDS
+#   layoff       best multiplier +4.0   real, but 4x under-weighted
+#   home         best multiplier  0.8   about right, negligible
+#
+# Fatigue and short rest are backwards because they are not measuring tiredness
+# at all — they are measuring HAVING BEEN WINNING. Court time accumulates by
+# advancing through a draw, and playing on consecutive days means you keep
+# progressing. When player A is much fresher than B, A wins only 44.4% of the
+# time. Penalising the tired player was penalising form.
+#
+# The honest fix is not to invert them — "tired players win" is causally wrong and
+# would mislead on a genuinely exhausted player. It is to drop the confounded
+# proxy and use the real variable underneath it: how far into this event each
+# player has already played. That IS in-tournament form the ratings have not yet
+# absorbed, and it is worth ~80 Elo per match already won.
+FATIGUE_ELO_PER_INDEX = 0.0     # retired: measured backwards (see above)
+SHORT_REST_PENALTY = 0.0        # retired: same confound
+
+# Rust is real and was badly under-weighted. -30 measured at x4.
+LONG_LAYOFF_PENALTY = -120.0
+
+# Elo per match already won at THIS event, applied as a difference between the
+# two players. Chosen from the flat region (60-100) of the holdout curve; a clean
+# train-only fit gave 100, which still held up out of sample. Fires on 23% of
+# matches — those where the two players have taken different paths into the round,
+# which is mostly seeds with byes against players who had to qualify through.
+EVENT_PROGRESS_ELO = 80.0
+
+HOME_ELO_BONUS = 18.0           # measured at x0.8 — near enough, and it is small
 ALTITUDE_SERVE_BONUS = 0.010    # +1.0pt of service points won at ~2000m+
 
 
@@ -222,15 +255,17 @@ def conditions_elo_delta(state: dict) -> tuple[float, dict]:
     """
     parts: dict[str, float] = {}
 
-    fatigue = float(state.get("fatigue_index", 0.0) or 0.0)
-    if fatigue > 0:
-        parts["fatigue"] = FATIGUE_ELO_PER_INDEX * fatigue
+    # In-tournament progress: matches already won at THIS event. Replaces the
+    # fatigue and short-rest terms, which measured the same thing with the wrong
+    # sign. Absent for a fixture at an event we have no results for yet, in which
+    # case it simply does not fire.
+    played = state.get("matches_this_event")
+    if played is not None and np.isfinite(played) and played > 0:
+        parts["event_progress"] = EVENT_PROGRESS_ELO * float(played)
 
     rest = state.get("days_rest")
     if rest is not None and np.isfinite(rest):
-        if rest <= 1:
-            parts["short_rest"] = SHORT_REST_PENALTY
-        elif rest >= 60:
+        if rest >= 60:
             # Rust is real but self-limiting; scale it in rather than a cliff.
             parts["layoff"] = LONG_LAYOFF_PENALTY * min((rest - 60) / 120.0 + 0.5, 1.0)
 

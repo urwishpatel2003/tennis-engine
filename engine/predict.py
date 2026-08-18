@@ -194,6 +194,7 @@ class Engine:
         # log loss in-sample — noise. They describe how a player plays, which is
         # worth showing, not how likely they are to win.
         self.rally = self._load(PROCESSED / "rally_current.parquet")
+        self._event_wins = self._load_event_progress()
         self.players = self._load_players()
 
         # Fast lookups
@@ -234,6 +235,52 @@ class Engine:
             tuple(r[k] for k in keys): r
             for r in df.to_dict("records")
         }
+
+    def _load_event_progress(self) -> dict:
+        """
+        (tour, season, event) -> {player_id: matches already won there}.
+
+        The single most valuable adjustment measured (+0.0030 log loss on a
+        walk-forward holdout) is how far into the CURRENT event a player has
+        already played. `_latest_conditions` cannot supply it — that holds the
+        state from a player's last completed match, which is usually a different
+        tournament entirely.
+
+        A player still alive in a draw has won every match they have played there,
+        so counting their wins at the event is the same quantity engine/conditions
+        computes as `matches_this_event`.
+        """
+        out: dict = {}
+        for tour in self.tours:
+            path = RAW / f"matches_{tour}.parquet"
+            if not path.exists():
+                continue
+            m = pd.read_parquet(path, columns=["season", "tourney_name",
+                                               "winner_id", "tourney_date"])
+            recent = m[m["season"] >= int(m["season"].max()) - 1]
+            for r in recent.itertuples(index=False):
+                key = (tour, int(r.season), str(r.tourney_name).strip().lower())
+                out.setdefault(key, {})
+                pid = int(r.winner_id)
+                out[key][pid] = out[key].get(pid, 0) + 1
+        return out
+
+    def event_progress(self, pid: int, tour: str, tournament: str | None,
+                       as_of: pd.Timestamp | None) -> int:
+        """Matches this player has already won at `tournament` this season."""
+        if not tournament:
+            return 0
+        season = int((as_of or pd.Timestamp.today()).year)
+        name = str(tournament).strip().lower()
+        # The odds feed says "ATP Cincinnati Open"; the archive says "Cincinnati".
+        for key in ((tour, season, name), (tour, season - 1, name)):
+            hit = self._event_wins.get(key)
+            if hit:
+                return int(hit.get(int(pid), 0))
+        for (t, sn, nm), players in self._event_wins.items():
+            if t == tour and sn == season and (nm in name or name in nm):
+                return int(players.get(int(pid), 0))
+        return 0
 
     def _latest_conditions(self) -> dict:
         """Most recent condition row per (tour, player) — the state they carry in."""
@@ -390,6 +437,12 @@ class Engine:
 
         a = self.player_state(player_a, tour, surface, as_of)
         b = self.player_state(player_b, tour, surface, as_of)
+        # In-tournament progress has to come from the archive, not from the
+        # player's last-match snapshot, which is a different event.
+        a.condition["matches_this_event"] = self.event_progress(
+            a.player_id, tour, tournament, as_of)
+        b.condition["matches_this_event"] = self.event_progress(
+            b.player_id, tour, tournament, as_of)
         out = predict_from_states(
             a, b, tour=tour, surface=surface, best_of=best_of, as_of=as_of,
             indoor=indoor, altitude=altitude, final_set_tb=final_set_tb,

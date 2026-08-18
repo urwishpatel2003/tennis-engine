@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-08-17",
+  "generated_at": "2026-08-18",
   "seasons": "2015-2026",
-  "matches": 47502,
-  "logloss": 0.6128,
-  "accuracy": 0.6544,
+  "matches": 47563,
+  "logloss": 0.6127,
+  "accuracy": 0.6549,
   "min_prior_matches": 20,
   "scores_included": false,
   "note": "Regenerate with: python backtest.py --seasons 2015-2026 --no-scores --by season surface tour, then copy data/processed/backtest_results.csv into reports/. Deliberately NOT run during the Railway build - it pushed the build past its deadline."

@@ -253,8 +253,11 @@ def create_order(ticker: str, count: int, price: float, client_order_id: str,
         return out
     ticket_cap = bankroll * risk.MAX_TICKET_PCT / 100.0
     if cost > ticket_cap + 0.01:
+        # Almost always means an earlier order filled and shrank the bankroll,
+        # leaving this ticket sized against a balance that no longer exists.
         out["error"] = (f"${cost:.2f} exceeds the per-ticket cap of "
-                        f"${ticket_cap:.2f}")
+                        f"${ticket_cap:.2f} (bankroll is now ${bankroll:.2f}) - "
+                        f"re-scan to re-size the ticket")
         return out
     if cost > b["daily_remaining"] + 0.01:
         out["error"] = (f"${cost:.2f} exceeds what remains today "

@@ -534,6 +534,12 @@ ${t.backing} to win — ${t.match}
             backing:t.backing, tour:t.tour})}).then(x=>x.json());
         btn.textContent = r.ok ? (r.dry_run ? 'Dry run logged' : 'Placed') : 'Refused';
         if(!r.ok) alert('Not placed: ' + (r.error || 'unknown'));
+        /* A filled order lowers the bankroll, which lowers the per-ticket cap.
+           Every other ticket on screen was sized against the OLD balance and is
+           now stale - left alone they get refused for being a dollar over a cap
+           that moved beneath them. Re-scan so the remaining tickets are sized
+           against what the account actually holds now. */
+        if(r.ok && !r.dry_run){ loadKalshi(); loadKalshiReport($('#kscope')?.value); }
       } catch(e){ btn.textContent = 'Failed'; alert(e); }
     };
   });

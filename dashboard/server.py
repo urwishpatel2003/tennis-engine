@@ -821,6 +821,14 @@ def _kalshi_selftest() -> None:
         print("[kalshi] credentials not set - sizing disabled", flush=True)
         return
     mode = "LIVE (real money)" if kalshi.live_mode() else "demo"
+    # Say the arm state out loud. Whether a confirmed ticket is sent or logged is
+    # the single most consequential setting here, it is decided by an env var
+    # nobody can see from outside the container, and "is it actually armed?" is
+    # otherwise answerable only by pressing the button and finding out.
+    print(f"[kalshi] ARMED - confirmed tickets WILL be sent, cap "
+          f"{risk.MAX_TICKET_PCT}% per ticket" if kalshi_order.armed()
+          else "[kalshi] not armed - confirmed tickets are logged, not sent",
+          flush=True)
     try:
         bal = kalshi.balance()
         print(f"[kalshi] OK - {mode}, balance ${bal.get('dollars')}", flush=True)

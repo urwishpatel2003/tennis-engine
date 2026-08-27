@@ -57,6 +57,7 @@ import pandas as pd
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from engine import atp_scrape
 from engine.schema import REFRESH_LOOKBACK_DAYS, build_match_id  # noqa: F401
 from engine.schema import PROCESSED, RAW, normalise_matches
 
@@ -194,7 +195,92 @@ def _f(row: dict, key: str):
         return np.nan
 
 
-def fetch_new_atp(after: pd.Timestamp, verbose: bool = True) -> tuple[pd.DataFrame, dict]:
+def _canonical(src_players: dict, code: str, fallback: object) -> object:
+    """The mirror's name for an ATP player code, so both sources agree."""
+    p = src_players.get(code) or {}
+    full = f"{p.get('first_name','')} {p.get('last_name','')}".strip()
+    return full or fallback
+
+
+def _site_rows(tours: dict, src_players: dict, after: pd.Timestamp, have: set,
+               limit: int = 12, verbose: bool = True) -> list[tuple]:
+    """
+    Recent events read straight from atptour.com, shaped like mirror rows.
+
+    The mirror files main-draw results late - on 2026-08-27 it held nothing past
+    qualifying for Winston-Salem, four days in, and had never filed the second
+    half of Cincinnati including the final. Its TOURNAMENT list is current
+    though, so the events and their result URLs come from there and only the
+    matches are fetched from the site.
+
+    Rows are shaped exactly like the mirror's so the existing conversion handles
+    them unchanged. Serve statistics are absent and arrive as NaN: the site keeps
+    them on a separate per-match page, so a scraped match updates the ratings but
+    not the point model. That is the same trade any results-only source forces,
+    and it is why the mirror is still preferred where it has filed.
+
+    `limit` caps how many events are fetched in one pass, newest first, so a long
+    lookback cannot turn into a hundred requests.
+    """
+    cutoff = after - pd.Timedelta(days=REFRESH_LOOKBACK_DAYS)
+    now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+    recent = []
+    for t in tours.values():
+        raw = (t.get("start_dtm") or "")[:8]
+        start = pd.to_datetime(raw, format="%Y%m%d", errors="coerce")
+        if pd.isna(start) or start < cutoff or start > now:
+            continue
+        if not t.get("url"):
+            continue
+        recent.append((start, t))
+    recent.sort(key=lambda x: x[0], reverse=True)
+    recent = recent[:limit]
+    if verbose and recent:
+        print(f"  [refresh] atptour.com: checking {len(recent)} recent event(s)")
+
+    out, added = [], 0
+    for start, t in recent:
+        for m in atp_scrape.fetch_results(t["url"]):
+            code_w = (m.get("winner_code") or "").lower()
+            code_l = (m.get("loser_code") or "").lower()
+            rnd = (m.get("round") or "").upper()
+            if rnd not in ROUND_MAP:
+                continue
+            # Name the players the way the MIRROR names them, keyed on the ATP
+            # player code the site publishes in its profile links.
+            #
+            # Without this the two sources disagree on spelling - "Aleksandr
+            # Shevchenko" against "Alexander Shevchenko", "Daniel Merida"
+            # against "Daniel Merida Aguilar" - and since the resolver works on
+            # names, one player became two ids, the pairing dedupe saw two
+            # different pairings, and the same match was stored twice. Five
+            # players ended up playing the same round twice at Cincinnati.
+            name_w = _canonical(src_players, code_w, m.get("winner_name"))
+            name_l = _canonical(src_players, code_l, m.get("loser_name"))
+
+            # And use the mirror's own id format, so a match filed by BOTH
+            # sources collapses on match_id before the pairing guard is needed.
+            src = f"{t['id']}-{code_w}-{code_l}-{rnd}"
+            if src in have:
+                continue
+            score = m.get("score") or ""
+            out.append(({
+                "id": src,
+                "tournament_id": t["id"],
+                "stadie_id": rnd,
+                "winner_name": name_w, "winner_code": code_w,
+                "loser_name": name_l, "loser_code": code_l,
+                "match_score": score,
+                "match_ret": "RET" if "RET" in score.upper() else "",
+            }, t, start))
+            added += 1
+    if verbose:
+        print(f"  [refresh] atptour.com: {added:,} match(es) not in the mirror")
+    return out
+
+
+def fetch_new_atp(after: pd.Timestamp, verbose: bool = True,
+                  use_site: bool = True) -> tuple[pd.DataFrame, dict]:
     """Every ATP main-draw match played after `after`, in canonical raw shape."""
     if verbose:
         print(f"  [refresh] source: ManTennisData (atptour.com scrape)")
@@ -233,6 +319,16 @@ def fetch_new_atp(after: pd.Timestamp, verbose: bool = True) -> tuple[pd.DataFra
             kept += 1
         if verbose and kept:
             print(f"  [refresh] {yr}: {kept:,} new main-draw matches")
+
+    # Supplement with the site itself, for events the mirror has filed late.
+    if use_site:
+        try:
+            have = {r.get("id") for r, _, _ in rows}
+            rows.extend(_site_rows(tours, src_players, after, have,
+                                   verbose=verbose))
+        except Exception as e:      # noqa: BLE001 - a scrape must not break refresh
+            if verbose:
+                print(f"  [refresh] atptour.com unavailable: {type(e).__name__} {e}")
 
     if not rows:
         return pd.DataFrame(), {"new": 0, "skipped_qualifying": skipped_q}

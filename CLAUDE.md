@@ -367,3 +367,29 @@ deliberately separate for that reason.
 The build still produces the archive, so the Volume is not a data store and
 nothing in it is required for the dashboard to serve predictions — losing it
 would cost the betting record and the frozen odds, nothing else.
+
+## ATP results: two sources, deliberately
+
+`msolonskyi/ManTennisData` remains the primary ATP source because it carries
+SERVE STATISTICS, which the point model needs. But it files main-draw results
+late — on 2026-08-27 it held nothing past qualifying for Winston-Salem four days
+in, and had never filed the second half of Cincinnati including the final.
+
+`engine/atp_scrape.py` therefore reads the same atptour.com results pages
+directly, for recent events only, and `engine/refresh.py` merges them. The
+mirror's TOURNAMENT list is current, so events and their result URLs come from
+there; only the matches are scraped.
+
+- Scraped matches have **no serve statistics** (those live on a separate
+  per-match page), so they update the ratings but not the point model.
+- Player names are rewritten to the MIRROR's spelling, keyed on the ATP player
+  code in the profile link. Without that the two sources disagree — "Aleksandr"
+  against "Alexander", "Daniel Merida" against "Daniel Merida Aguilar" — one
+  player becomes two ids, the pairing guard sees two different pairings, and the
+  same match is stored twice. It put five players in the same round twice.
+- Scraped rows reuse the mirror's `src_id` format, so a match filed by both
+  collapses on `match_id` before the pairing guard is needed.
+- Parsing is stdlib `html.parser`. bs4 is available locally but the daily refresh
+  runs on the server, and requirements.txt installs nothing beyond pandas/flask.
+- robots.txt allows crawling; requests identify themselves, are rate-limited, and
+  are capped at 12 events per pass.

@@ -2,59 +2,59 @@
   "tours": {
     "atp": {
       "before": {
-        "matches": 49285,
-        "last_match": "2026-08-13"
-      },
-      "after": {
         "matches": 49511,
         "last_match": "2026-08-18"
       },
-      "added": 226,
+      "after": {
+        "matches": 49633,
+        "last_match": "2026-08-24"
+      },
+      "added": 122,
       "fetched": {
-        "new": 857,
-        "players_matched": 1713,
-        "players_minted": 1,
-        "skipped_qualifying": 437,
-        "with_serve_stats": 815,
+        "new": 766,
+        "players_matched": 1532,
+        "players_minted": 0,
+        "skipped_qualifying": 318,
+        "with_serve_stats": 609,
         "date_range": [
-          "2026-07-27",
-          "2026-08-18"
+          "2026-08-02",
+          "2026-08-24"
         ]
       }
     },
     "wta": {
       "before": {
-        "matches": 44936,
-        "last_match": "2026-08-13"
+        "matches": 44997,
+        "last_match": "2026-08-23"
       },
       "after": {
         "matches": 44997,
         "last_match": "2026-08-23"
       },
-      "added": 61,
+      "added": 0,
       "fetched": {
-        "events_checked": 52,
-        "events_with_results": 9,
-        "new": 381,
+        "events_checked": 48,
+        "events_with_results": 5,
+        "new": 261,
         "with_serve_stats": 0,
-        "players_matched": 761,
-        "players_minted": 1,
+        "players_matched": 522,
+        "players_minted": 0,
         "date_range": [
-          "2026-07-26",
+          "2026-08-02",
           "2026-08-23"
         ]
       }
     }
   },
   "rebuilt": false,
-  "added_total": 287,
+  "added_total": 122,
   "before": {
-    "matches": 49285,
-    "last_match": "2026-08-13"
-  },
-  "after": {
     "matches": 49511,
     "last_match": "2026-08-18"
   },
-  "completed_at": "2026-08-27T15:30:15+00:00"
+  "after": {
+    "matches": 49633,
+    "last_match": "2026-08-24"
+  },
+  "completed_at": "2026-08-27T15:49:23+00:00"
 }

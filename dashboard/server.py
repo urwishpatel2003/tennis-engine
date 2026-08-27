@@ -48,6 +48,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from engine.predict import Engine  # noqa: E402
 from engine import bet_log  # noqa: E402
 from engine import kalshi  # noqa: E402
+from engine import kalshi_match  # noqa: E402
+from engine import kalshi_order  # noqa: E402
+from engine import risk  # noqa: E402
 from engine import live_feed  # noqa: E402
 from engine.live_state import leverage, win_prob_from_state  # noqa: E402
 from engine.schema import (  # noqa: E402
@@ -436,6 +439,125 @@ def api_fixtures():
 
     d["available"] = True
     return jsonify(_clean(d))
+
+
+@app.route("/api/kalshi/tickets")
+def api_kalshi_tickets():
+    """
+    Costed order tickets for whatever the model currently recommends.
+
+    Builds only. Nothing here can place an order; submission is a separate
+    endpoint that requires an explicit confirmation.
+
+    A fixture with no Kalshi market, or no resting offer, produces a REASON
+    rather than a ticket. Both are ordinary - most fixtures have neither.
+    """
+    if not kalshi.configured():
+        return jsonify({"available": False,
+                        "reason": "Kalshi credentials are not set", "tickets": []})
+    if not live.have_key():
+        return jsonify({"available": False,
+                        "reason": "ODDS_API_KEY is not set, so there are no picks",
+                        "tickets": []})
+    try:
+        bankroll = float(kalshi.balance().get("dollars") or 0.0)
+    except Exception as e:
+        return jsonify({"available": False,
+                        "reason": f"could not read balance: {str(e)[:120]}",
+                        "tickets": []})
+
+    budget = risk.budget(bankroll)
+    try:
+        fixtures = live.fixtures(engine(), tours=("atp", "wta")).get("fixtures", [])
+    except Exception as e:
+        return jsonify({"available": False, "reason": str(e)[:160], "tickets": []})
+
+    picks = [f for f in fixtures if f.get("bet")]
+    events = {t: kalshi_match.open_events(t) for t in ("atp", "wta")}
+    tickets, skipped = [], []
+    for f in picks:
+        tour = str(f.get("tour", "atp")).lower()
+        found = kalshi_match.find_market(f["player_a"], f["player_b"], tour,
+                                         events=events.get(tour))
+        if not found.get("ok"):
+            skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+                            "reason": found.get("reason")})
+            continue
+        bet = f["bet"]
+        backing_a = bet["side"] == "A"
+        market = found["a"] if backing_a else found["b"]
+        price = kalshi_match.ask_price(market)
+        if price is None:
+            skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+                            "reason": "no offer resting on that contract"})
+            continue
+        prob = f["model_prob_a"] if backing_a else 1.0 - f["model_prob_a"]
+        sized = kalshi.size_position(prob, price, bankroll, maker=risk.MAKER,
+                                     max_stake_pct=budget["ticket_pct"])
+        if sized["contracts"] < 1:
+            skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+                            "reason": sized.get("reason") or "sized to nothing"})
+            continue
+        tickets.append({
+            "match": f"{f['player_a']} v {f['player_b']}",
+            "tournament": f.get("tournament"), "tour": tour,
+            "backing": bet["player"], "ticker": market.get("ticker"),
+            "event": found["event"], "match_type": found["match_type"],
+            "model_prob": round(prob, 4), "price": price,
+            "contracts": sized["contracts"], "stake": sized["stake"],
+            "fee": sized["fee"], "ev": sized["ev"], "ev_pct": sized["ev_pct"],
+            # Created ONCE here and echoed back on confirm, so a retry after a
+            # timeout is recognised by Kalshi rather than doubling the position.
+            "client_order_id": kalshi_order.new_client_order_id(),
+        })
+
+    tickets.sort(key=lambda t: -(t["ev"] or 0))
+    return jsonify(_clean({
+        "available": True, "tickets": tickets, "skipped": skipped,
+        "budget": budget, "armed": kalshi_order.armed(),
+        "live": kalshi.live_mode(),
+    }))
+
+
+@app.route("/api/kalshi/submit", methods=["POST"])
+def api_kalshi_submit():
+    """
+    Place ONE order that a person has just confirmed.
+
+    Every limit is re-checked here rather than trusted from the browser: a
+    client is the wrong place to enforce a spending cap. The request must carry
+    confirm=true, which is what makes this a deliberate act rather than a
+    consequence of loading a page.
+    """
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"ok": False, "error": "confirmation required"}), 400
+    try:
+        ticker = str(body["ticker"])
+        count = int(body["contracts"])
+        price = float(body["price"])
+        coid = str(body["client_order_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"ok": False,
+                        "error": "ticker, contracts, price and client_order_id "
+                                 "are all required"}), 400
+
+    result = kalshi_order.create_order(ticker, count, price, coid)
+    if result.get("error"):
+        return jsonify({"ok": False, **result}), 400
+    if result.get("sent"):
+        try:
+            bet_log.append([{
+                "player_a": body.get("match", ""), "player_b": "",
+                "tour": body.get("tour"), "commence_time": body.get("commence_time"),
+                "side": "KALSHI", "player": body.get("backing"),
+                "odds": round(1.0 / price, 4) if price else None,
+                "stake_pct": None, "venue": "kalshi", "ticker": ticker,
+                "contracts": count, "price": price,
+            }])
+        except Exception as e:
+            print(f"[kalshi] order placed but not logged: {e}", flush=True)
+    return jsonify({"ok": True, **result})
 
 
 @app.route("/api/track_record")

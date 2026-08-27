@@ -454,6 +454,90 @@ if(!$('#rec')) return;   // only the Today view has this panel
     </tbody></table></div>`;
 }
 
+/* Kalshi tickets. Building a ticket costs nothing; placing an order is a
+   separate, explicitly confirmed act. Nothing here fires on load, on a timer,
+   or in a loop - each order needs its own click and its own confirmation. */
+async function loadKalshi(){
+  if(!$('#kal')) return;
+  let d;
+  try { d = await api('/api/kalshi/tickets'); }
+  catch(e){ $('#kal').innerHTML = `<div class="err">${e}</div>`; return; }
+  if(d.available === false){
+    $('#kal').innerHTML = `<p class="muted">Tickets unavailable — ${d.reason||'unknown'}</p>`;
+    return;
+  }
+  const b = d.budget || {};
+  const mode = d.live
+    ? `<span class="down"><strong>LIVE — real money</strong></span>`
+    : `<span class="dim">demo environment</span>`;
+  const arm = d.armed
+    ? `<span class="down">armed: a confirmed ticket WILL be sent</span>`
+    : `<span class="dim">dry run: confirming logs the order and sends nothing</span>`;
+  const head = `<p class="muted">${mode} · ${arm}<br>
+     bankroll $${num(b.bankroll,2)} · committed today $${num(b.committed,2)} of
+     $${num(b.daily_cap,2)} · remaining $${num(b.daily_remaining,2)}</p>`;
+
+  const rows = d.tickets || [];
+  if(!rows.length){
+    const why = (d.skipped||[]).slice(0,6).map(x =>
+      `<li class="muted">${x.match} — ${x.reason}</li>`).join('');
+    $('#kal').innerHTML = head + `<p class="muted">No tickets right now.</p>` +
+      (why ? `<ul>${why}</ul>` : '');
+    return;
+  }
+  $('#kal').innerHTML = head + `<div class="scroll"><table><thead><tr>
+      <th class="l">Match</th><th class="l">Backing</th><th>Model</th><th>Price</th>
+      <th>Contracts</th><th>Stake</th><th>Fee</th><th>EV</th><th></th>
+    </tr></thead><tbody>
+    ${rows.map((t,i)=>`<tr>
+      <td class="l">${t.match}<br><span class="dim">${t.ticker}</span></td>
+      <td class="l">${t.backing}</td>
+      <td>${pct(t.model_prob)}</td>
+      <td>${num(t.price,2)}</td>
+      <td>${t.contracts}</td>
+      <td>$${num(t.stake,2)}</td>
+      <td class="dim">$${num(t.fee,2)}</td>
+      <td class="${t.ev>0?'up':'down'}">${t.ev>0?'+':''}$${num(t.ev,2)}
+        <br><span class="dim">${num(t.ev_pct,1)}%</span></td>
+      <td><button data-k="${i}">Place…</button></td>
+    </tr>`).join('')}
+    </tbody></table></div>
+    <p class="note">A ticket is not an order. Placing one asks for confirmation
+      first, and every limit is re-checked on the server — the browser is the
+      wrong place to enforce a spending cap.</p>`;
+
+  $('#kal').querySelectorAll('button[data-k]').forEach(btn => {
+    btn.onclick = async () => {
+      const t = rows[+btn.dataset.k];
+      const ok = confirm(
+        `Place this order?
+
+${t.backing} to win — ${t.match}
+` +
+        `${t.contracts} contracts at ${num(t.price,2)}
+` +
+        `Cost $${num(t.stake,2)} plus $${num(t.fee,2)} fee
+` +
+        `Expected value ${t.ev>0?'+':''}$${num(t.ev,2)}
+
+` +
+        (d.armed ? 'This WILL send a real order.' : 'Dry run: nothing will be sent.'));
+      if(!ok) return;
+      btn.disabled = true; btn.textContent = 'Placing…';
+      try {
+        const r = await fetch('/api/kalshi/submit', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({confirm:true, ticker:t.ticker,
+            contracts:t.contracts, price:t.price,
+            client_order_id:t.client_order_id, match:t.match,
+            backing:t.backing, tour:t.tour})}).then(x=>x.json());
+        btn.textContent = r.ok ? (r.dry_run ? 'Dry run logged' : 'Placed') : 'Refused';
+        if(!r.ok) alert('Not placed: ' + (r.error || 'unknown'));
+      } catch(e){ btn.textContent = 'Failed'; alert(e); }
+    };
+  });
+}
+
 async function viewToday(){
   $('#view').innerHTML = `
    <div class="card">
@@ -474,6 +558,10 @@ async function viewToday(){
    <div class="card">
     <h2>Track record <span class="muted" style="font-weight:400">— every bet this page has named</span></h2>
     <div id="rec"><p class="muted">Loading record…</p></div>
+   </div>
+   <div class="card">
+    <h2>Kalshi tickets <span class="muted" style="font-weight:400">— sized against your live balance</span></h2>
+    <div id="kal"><p class="muted">Loading tickets…</p></div>
    </div>`;
 
   let DATA = null;
@@ -485,6 +573,7 @@ async function viewToday(){
     DATA = await api('/api/fixtures', q);
     render();
     loadRecord();
+    loadKalshi();
   }
 
   function render(){

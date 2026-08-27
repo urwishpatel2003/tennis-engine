@@ -656,16 +656,34 @@ def api_kalshi_report():
     # Tickers are opaque; a person reading this wants player names. Resolve each
     # ticker once, and let a lookup failure degrade to the ticker rather than
     # taking the page down with it.
-    names: dict[str, str] = {}
+    mkts: dict[str, dict] = {}
+
+    def market_of(ticker: str) -> dict:
+        t = str(ticker or "")
+        if t and t not in mkts:
+            try:
+                mkts[t] = kalshi.market(t) or {}
+            except Exception:
+                mkts[t] = {}
+        return mkts.get(t, {})
 
     def name_of(ticker: str) -> str:
         t = str(ticker or "")
-        if t and t not in names:
-            try:
-                names[t] = str(kalshi.market(t).get("yes_sub_title") or t)
-            except Exception:
-                names[t] = t
-        return names.get(t, t)
+        return str(market_of(t).get("yes_sub_title") or t)
+
+    def sport_of(ticker: str) -> str:
+        """
+        Series prefix -> a readable sport. Tickers look like
+        KXWTAMATCH-26AUG27TAUPAR-PAR, so the series is everything before the
+        first dash. Unknown series degrade to the series itself rather than
+        being lumped into an 'other' bucket that hides what they were.
+        """
+        series = str(ticker or "").split("-")[0]
+        known = {"KXATPMATCH": "ATP", "KXWTAMATCH": "WTA"}
+        if series in known:
+            return known[series]
+        s2 = series[2:] if series.startswith("KX") else series
+        return (s2[:-5] if s2.endswith("MATCH") else s2) or "other"
 
     seen = {str(r.get("ticker") or "") for r in
             (raw_orders + raw_fills + raw_pos + raw_settle)}
@@ -676,6 +694,7 @@ def api_kalshi_report():
     out["orders"] = [{
         "order_id": o.get("order_id"), "ticker": o.get("ticker"),
         "backing": name_of(o.get("ticker")),
+        "sport": sport_of(o.get("ticker")),
         "status": o.get("status"), "side": o.get("book_side") or o.get("side"),
         "price": n(o.get("yes_price_dollars")),
         "placed": n(o.get("initial_count_fp")),
@@ -691,6 +710,7 @@ def api_kalshi_report():
         "order_id": f.get("order_id"),
         "ticker": f.get("ticker") or f.get("market_ticker"),
         "backing": name_of(f.get("ticker") or f.get("market_ticker")),
+        "sport": sport_of(f.get("ticker") or f.get("market_ticker")),
         "side": f.get("outcome_side"), "taker": f.get("is_taker"),
         "count": n(f.get("count_fp")),
         "price": n(f.get("yes_price_dollars")),
@@ -700,13 +720,27 @@ def api_kalshi_report():
 
     out["positions"] = [{
         "ticker": p_.get("ticker"), "backing": name_of(p_.get("ticker")),
+        "sport": sport_of(p_.get("ticker")),
         "contracts": n(p_.get("position_fp")),
         "exposure": n(p_.get("market_exposure_dollars")),
         "traded": n(p_.get("total_traded_dollars")),
         "realized": n(p_.get("realized_pnl_dollars")),
         "fees": n(p_.get("fees_paid_dollars")),
+        # What the position could be sold for RIGHT NOW: contracts x the resting
+        # bid. The bid, not the ask - the ask is what a buyer pays, and marking
+        # a position at the price you would have to pay to buy it again
+        # overstates what it is worth.
+        "bid": n(market_of(p_.get("ticker")).get("yes_bid_dollars")),
+        "mark": round((n(p_.get("position_fp")) or 0.0)
+                      * (n(market_of(p_.get("ticker")).get("yes_bid_dollars")) or 0.0), 2),
         "updated": p_.get("last_updated_ts"),
     } for p_ in raw_pos if (n(p_.get("position_fp")) or 0) != 0]
+    for p_ in out["positions"]:
+        # Unrealised against the cost of getting in. On an illiquid book the bid
+        # is often zero, which marks a live position at nothing - that is what
+        # you could actually get for it, not a bug, but it makes the figure
+        # jumpy and it is labelled as a mark rather than a value.
+        p_["unrealised"] = round((p_["mark"] or 0.0) - (p_["traded"] or 0.0), 2)
 
     settled = []
     for s_ in raw_settle:
@@ -718,6 +752,7 @@ def api_kalshi_report():
         fee = n(s_.get("fee_cost")) or 0.0
         settled.append({
             "ticker": s_.get("ticker"), "backing": name_of(s_.get("ticker")),
+            "sport": sport_of(s_.get("ticker")),
             "result": s_.get("market_result"),
             "contracts": n(s_.get("yes_count_fp")) or n(s_.get("no_count_fp")),
             "cost": round(cost, 2), "revenue": round(revenue, 2),
@@ -745,7 +780,58 @@ def api_kalshi_report():
         "orders_sent": len(out["orders"]),
         "orders_filled": sum(1 for o in out["orders"] if (o["filled"] or 0) > 0),
         "orders_unfilled": sum(1 for o in out["orders"] if not (o["filled"] or 0)),
+        "open_mark": round(sum(p_["mark"] or 0.0 for p_ in out["positions"]), 2),
+        "open_unrealised": round(sum(p_["unrealised"] or 0.0
+                                     for p_ in out["positions"]), 2),
+        "avg_stake": round(staked / len(settled), 2) if settled else None,
+        "best": max((r["pl"] for r in settled), default=None),
+        "worst": min((r["pl"] for r in settled), default=None),
     }
+    # Total return counts open positions at their mark. Realised P/L alone
+    # reads as a pure loss while everything is still open, which is exactly the
+    # state this account is in tonight.
+    out["record"]["total_return"] = round(
+        out["record"]["realised_pl"] + out["record"]["open_unrealised"], 2)
+
+    # ── by sport ──────────────────────────────────────────────────────────────
+    # Tennis is what this model does; anything else on the account is noise
+    # against it. Keeping them apart is the only way the tennis numbers mean
+    # anything once other markets are in the mix.
+    sports: dict[str, dict] = {}
+
+    def bucket(name: str) -> dict:
+        return sports.setdefault(name, {
+            "sport": name, "orders": 0, "filled": 0, "open": 0,
+            "open_exposure": 0.0, "open_mark": 0.0,
+            "settled": 0, "won": 0, "staked": 0.0, "realised_pl": 0.0,
+            "fees": 0.0})
+
+    for o in out["orders"]:
+        b = bucket(o["sport"])
+        b["orders"] += 1
+        b["filled"] += 1 if (o["filled"] or 0) > 0 else 0
+        b["fees"] += o["fees"] or 0.0
+    for p_ in out["positions"]:
+        b = bucket(p_["sport"])
+        b["open"] += 1
+        b["open_exposure"] += p_["exposure"] or 0.0
+        b["open_mark"] += p_["mark"] or 0.0
+    for r in settled:
+        b = bucket(r["sport"])
+        b["settled"] += 1
+        b["won"] += 1 if r["pl"] > 0 else 0
+        b["staked"] += r["cost"]
+        b["realised_pl"] += r["pl"]
+
+    for b in sports.values():
+        for k in ("open_exposure", "open_mark", "staked", "realised_pl", "fees"):
+            b[k] = round(b[k], 2)
+        b["roi_pct"] = (round(100.0 * b["realised_pl"] / b["staked"], 1)
+                        if b["staked"] else None)
+        b["win_pct"] = (round(100.0 * b["won"] / b["settled"], 1)
+                        if b["settled"] else None)
+    out["by_sport"] = sorted(sports.values(),
+                             key=lambda b: (-(b["settled"] + b["open"]), b["sport"]))
     return jsonify(_clean(out))
 
 

@@ -561,56 +561,63 @@ ${t.backing} to win — ${t.match}
 }
 
 /* ─── Kalshi ──────────────────────────────────────────────────────────────────
-   Four sections, deliberately not merged, because they answer different
-   questions and their disagreements are the interesting part:
+   One filter at the top, then sections that all obey it. The filter used to sit
+   in a card of its own containing nothing but a dropdown, which read as an empty
+   panel rather than as a control for the page.
 
-     Tickets      what the model would back right now
-     Orders       what was SENT - including the ones that never traded
-     Positions    what is OPEN
-     Record       what RESOLVED, which is the only real P/L
+   Sections are kept apart because they answer different questions:
+     Tickets    what the model would back now
+     Positions  what is OPEN, marked to the current bid
+     Orders     what was SENT - including the ones that never traded
+     Settled    what RESOLVED, which is the only real P/L
 
-   An order that rests and never fills costs nothing and proves nothing.
-   Counting sent orders as bets would flatter the record, so the record is
-   built from settlements only.                                              */
+   An order that rested and never filled cost nothing and proves nothing, so it
+   never reaches the record.                                                  */
 async function viewKalshi(){
   $('#view').innerHTML = `
-    <div class="card"><h2>Account</h2><div id="kacct" class="muted">loading…</div></div>
-    <div class="card"><h2>Showing</h2>
-      <div class="row"><div><label>Scope</label><select id="kscope">
-        <option value="page">Placed from this page</option>
-        <option value="tennis">Any ATP/WTA market</option>
-        <option value="account">Whole Kalshi account</option>
-      </select></div></div>
-      <p class="note" id="kscopenote">Kalshi's portfolio covers your whole
-        account, so anything you trade by hand in the app appears there too.
-        The default is the orders this page actually sent — that is the only
-        set that reflects the model.</p></div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <h2 style="margin:0">Kalshi</h2>
+        <div><label>Showing</label><select id="kscope">
+          <option value="page">Placed from this page</option>
+          <option value="tennis">Any ATP/WTA market</option>
+          <option value="account">Whole Kalshi account</option>
+        </select></div>
+      </div>
+      <div id="kacct" class="muted">loading…</div>
+      <p class="note" id="kscopenote"></p>
+    </div>
     <div class="card"><h2>Tickets to place</h2>
-      <p class="note">The model's current recommendations, sized to the account.
-        A ticket is not an order — placing one asks for confirmation first.</p>
+      <p class="note">The model's current picks, sized to your balance. A ticket
+        is not an order — placing one asks for confirmation first.</p>
       <div id="kal" class="muted">loading…</div></div>
-    <div class="card"><h2>Orders sent</h2>
-      <p class="note">Every order submitted, filled or not. An order that rested
-        and never traded is not a bet.</p>
-      <div id="kord" class="muted">loading…</div></div>
+    <div class="card"><h2>Performance</h2><div id="kperf" class="muted">loading…</div></div>
     <div class="card"><h2>Open positions</h2><div id="kpos" class="muted">loading…</div></div>
-    <div class="card"><h2>Record</h2>
-      <p class="note">Settled markets only — money that actually moved.</p>
-      <div id="krec" class="muted">loading…</div></div>`;
+    <div class="card"><h2>Orders sent</h2><div id="kord" class="muted">loading…</div></div>
+    <div class="card"><h2>Settled</h2><div id="krec" class="muted">loading…</div></div>`;
   loadKalshi();
   loadKalshiReport();
   $('#kscope').onchange = () => loadKalshiReport($('#kscope').value);
 }
 
 const money = (v,d=2) => v==null?'—':(v<0?'-$':'$')+Math.abs(+v).toFixed(d);
-const signed = (v,d=2) => v==null?'—':(v>0?'+':'')+money(v,d).replace('$','$');
+const signed = (v,d=2) => v==null?'—':(v>0?'+':'')+money(v,d);
+const cls = v => v>0?'up':(v<0?'down':'');
+/* A number with a label under it. The headline figures are the reason to open
+   this page, so they should not be buried in a table of key/value rows. */
+const kpi = (label, value, sub, klass) => `
+  <div style="min-width:120px;flex:1">
+    <div class="${klass||''}" style="font-size:1.5em;font-weight:650">${value}</div>
+    <div class="dim" style="font-size:.85em">${label}</div>
+    ${sub?`<div class="dim" style="font-size:.8em">${sub}</div>`:''}
+  </div>`;
 
 async function loadKalshiReport(scope){
   let d;
   try { d = await api('/api/kalshi/report', scope?{scope}:{}); }
   catch(e){ $('#kacct').innerHTML = `<div class="err">${e}</div>`; return; }
   if(d.available === false){
-    ['#kacct','#kord','#kpos','#krec'].forEach(x=>{ if($(x))
+    ['#kacct','#kperf','#kord','#kpos','#krec'].forEach(x=>{ if($(x))
       $(x).innerHTML = `<p class="muted">${d.reason||'unavailable'}</p>`; });
     return;
   }
@@ -618,43 +625,89 @@ async function loadKalshiReport(scope){
   const err = k => d.errors && d.errors[k]
     ? `<div class="err">${k}: ${d.errors[k]}</div>` : '';
 
+  $('#kacct').innerHTML = err('balance') +
+    `<div class="row" style="gap:24px;flex-wrap:wrap;margin-top:10px">
+      ${kpi('Balance', money(d.balance), d.live?'live account':'demo')}
+      ${kpi('Per ticket', money(b.bankroll*c.ticket_pct/100), c.ticket_pct+'% of bankroll')}
+      ${kpi('Used today', money(b.committed),
+            money(b.daily_remaining)+' left of '+money(b.daily_cap))}
+      ${kpi('Mode', d.armed?'ARMED':'safe',
+            d.armed?'confirmed tickets are sent':'tickets are logged only',
+            d.armed?'down':'dim')}
+    </div>`;
+
   const sc = d.scope_counts||{};
   const hidden = Object.values(sc).reduce((n,x)=>n+((x.account||0)-(x.shown||0)),0);
-  if($('#kscopenote') && d.scope!=='account')
-    $('#kscopenote').innerHTML = hidden
-      ? `Showing ${d.scope==='page'?'orders placed from this page':'ATP/WTA markets'}.
-         <b>${hidden}</b> account record(s) hidden — trades made elsewhere on
-         Kalshi are not the model's.`
-      : `Showing ${d.scope==='page'?'orders placed from this page':'ATP/WTA markets'}.
-         Nothing else on the account to hide.`;
+  const what = {page:'orders placed from this page', tennis:'ATP/WTA markets',
+                account:'your whole Kalshi account'}[d.scope];
+  $('#kscopenote').innerHTML = `Showing <b>${what}</b>.` + (d.scope!=='account'
+    ? (hidden ? ` ${hidden} other account record(s) hidden — trades made elsewhere
+                  on Kalshi are not this model's.`
+              : ' Nothing else on the account to hide.')
+    : ' Includes trades this model never made.');
 
-  $('#kacct').innerHTML = err('balance') + `<div class="scroll"><table><tbody>
-    <tr><td class="l">Balance</td><td>${money(d.balance)}</td>
-        <td class="l dim">${d.live?'live account':'demo'}</td></tr>
-    <tr><td class="l">Mode</td><td class="${d.armed?'down':''}">${
-      d.armed?'ARMED — confirmed tickets are sent':'not armed — tickets are logged only'}</td>
-        <td></td></tr>
-    <tr><td class="l">Per ticket</td><td>${money(b.bankroll*c.ticket_pct/100)}</td>
-        <td class="l dim">${c.ticket_pct}% of bankroll</td></tr>
-    <tr><td class="l">Today</td><td>${money(b.committed)} of ${money(b.daily_cap)}</td>
-        <td class="l dim">${money(b.daily_remaining)} left (${c.daily_pct}% cap)</td></tr>
-    <tr><td class="l">Kelly</td><td>${c.kelly_fraction}×</td>
-        <td class="l dim">${c.maker?'maker':'taker'}, max drift ${
-          (c.max_price_drift*100).toFixed(0)}c</td></tr>
-    </tbody></table></div>`;
+  /* Performance. Realised P/L alone reads as a flat zero while everything is
+     still open, so the open mark sits beside it rather than instead of it. */
+  $('#kperf').innerHTML = err('settlements') +
+    `<div class="row" style="gap:24px;flex-wrap:wrap">
+      ${kpi('Total return', signed(r.total_return), 'realised + open mark',
+            cls(r.total_return))}
+      ${kpi('Realised', signed(r.realised_pl),
+            r.settled?`${r.settled} settled${r.roi_pct!=null?' · '+r.roi_pct+'% ROI':''}`
+                     :'nothing settled yet', cls(r.realised_pl))}
+      ${kpi('Open', money(r.open_exposure),
+            `${r.open_positions} position(s) · mark ${money(r.open_mark)}`)}
+      ${kpi('Unrealised', signed(r.open_unrealised), 'mark vs cost',
+            cls(r.open_unrealised))}
+      ${kpi('Record', r.settled?`${r.won}–${r.lost}`:'—',
+            r.win_pct!=null?r.win_pct+'% win rate':'')}
+      ${kpi('Fees', money(r.fees), `${r.orders_filled}/${r.orders_sent} orders filled`)}
+    </div>
+    ${(d.by_sport||[]).length ? `
+    <h3 style="margin:18px 0 6px">By sport</h3>
+    <div class="scroll"><table><thead><tr>
+      <th class="l">Sport</th><th>Orders</th><th>Open</th><th>Exposure</th>
+      <th>Settled</th><th>Staked</th><th>Realised</th><th>ROI</th>
+    </tr></thead><tbody>${d.by_sport.map(x=>`<tr>
+      <td class="l"><b>${x.sport}</b></td>
+      <td>${x.filled}/${x.orders}</td><td>${x.open}</td>
+      <td>${money(x.open_exposure)}</td>
+      <td>${x.settled}${x.settled?` <span class="dim">(${x.won}W)</span>`:''}</td>
+      <td>${money(x.staked)}</td>
+      <td class="${cls(x.realised_pl)}">${signed(x.realised_pl)}</td>
+      <td class="${cls(x.roi_pct)}">${x.roi_pct!=null?x.roi_pct+'%':'—'}</td>
+    </tr>`).join('')}</tbody></table></div>` : ''}
+    ${r.settled ? `<p class="note">Best ${signed(r.best)} · worst ${signed(r.worst)}
+      · average stake ${money(r.avg_stake)}</p>` : ''}`;
 
-  /* Orders. Status and fill count matter more than the price: the common
-     outcome on these books is an order that never trades at all. */
+  const ps = d.positions||[];
+  $('#kpos').innerHTML = err('positions') + (!ps.length
+    ? `<p class="muted">Nothing open.</p>`
+    : `<div class="scroll"><table><thead><tr>
+      <th class="l">Sport</th><th class="l">Backing</th><th>Contracts</th>
+      <th>Cost</th><th>Bid</th><th>Mark</th><th>Unrealised</th>
+      </tr></thead><tbody>${ps.map(x=>`<tr>
+      <td class="l dim">${x.sport}</td>
+      <td class="l">${x.backing}<br><span class="dim">${x.ticker}</span></td>
+      <td>${num(x.contracts,0)}</td><td>${money(x.traded)}</td>
+      <td>${num(x.bid,2)}</td><td>${money(x.mark)}</td>
+      <td class="${cls(x.unrealised)}">${signed(x.unrealised)}</td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="note">Marked at the resting <b>bid</b> — what you could sell for
+        now, not what you paid. On a thin book the bid is often zero, which marks
+        a live position at nothing; that is the real price, not an error.</p>`);
+
   const os = d.orders||[];
   $('#kord').innerHTML = err('orders') + (!os.length
-    ? `<p class="muted">No orders sent yet.</p>`
+    ? `<p class="muted">No orders sent.</p>`
     : `<p class="muted">${r.orders_sent} sent · ${r.orders_filled} filled ·
         ${r.orders_unfilled} never traded</p>
       <div class="scroll"><table><thead><tr>
-      <th class="l">When</th><th class="l">Backing</th><th>Price</th>
-      <th>Placed</th><th>Filled</th><th class="l">Status</th><th>Fees</th>
+      <th class="l">When</th><th class="l">Sport</th><th class="l">Backing</th>
+      <th>Price</th><th>Placed</th><th>Filled</th><th class="l">Status</th><th>Fees</th>
       </tr></thead><tbody>${os.map(o=>`<tr>
       <td class="l dim">${localTime(o.created)}</td>
+      <td class="l dim">${o.sport}</td>
       <td class="l">${o.backing}<br><span class="dim">${o.ticker}</span></td>
       <td>${num(o.price,2)}</td><td>${num(o.placed,0)}</td>
       <td class="${o.filled?'up':'dim'}">${num(o.filled,0)}</td>
@@ -662,46 +715,21 @@ async function loadKalshiReport(scope){
       <td class="dim">${money(o.fees)}</td></tr>`).join('')}
       </tbody></table></div>`);
 
-  const ps = d.positions||[];
-  $('#kpos').innerHTML = err('positions') + (!ps.length
-    ? `<p class="muted">Nothing open.</p>`
-    : `<div class="scroll"><table><thead><tr>
-      <th class="l">Backing</th><th>Contracts</th><th>Exposure</th>
-      <th>Traded</th><th>Fees</th></tr></thead><tbody>
-      ${ps.map(x=>`<tr><td class="l">${x.backing}<br>
-        <span class="dim">${x.ticker}</span></td>
-        <td>${num(x.contracts,0)}</td><td>${money(x.exposure)}</td>
-        <td class="dim">${money(x.traded)}</td>
-        <td class="dim">${money(x.fees)}</td></tr>`).join('')}
-      </tbody></table></div>
-      <p class="note">Open exposure ${money(r.open_exposure)} across
-        ${r.open_positions} position(s).</p>`);
-
-  /* The record. ROI on money risked, not a win rate: one big loser undoes a
-     lot of small winners, and a win rate hides that entirely. */
   const ss = d.settlements||[];
   $('#krec').innerHTML = err('settlements') + (!ss.length
-    ? `<p class="muted">Nothing has settled yet — no record to report.</p>`
-    : `<div class="scroll"><table><tbody>
-      <tr><td class="l">Settled</td><td>${r.settled}</td>
-          <td class="l dim">${r.won} won, ${r.lost} lost${
-            r.win_pct!=null?` (${r.win_pct}%)`:''}</td></tr>
-      <tr><td class="l">Staked</td><td>${money(r.staked)}</td><td></td></tr>
-      <tr><td class="l">Realised P/L</td>
-          <td class="${r.realised_pl>0?'up':(r.realised_pl<0?'down':'')}">${
-            signed(r.realised_pl)}</td>
-          <td class="l dim">${r.roi_pct!=null?r.roi_pct+'% ROI':''} ·
-            ${money(r.fees)} fees</td></tr>
-      </tbody></table></div>
-      <div class="scroll"><table><thead><tr>
-      <th class="l">Settled</th><th class="l">Backed</th><th>Contracts</th>
-      <th>Cost</th><th>Returned</th><th>P/L</th></tr></thead><tbody>
-      ${ss.map(x=>`<tr><td class="l dim">${localTime(x.at)}</td>
-        <td class="l">${x.backing}</td><td>${num(x.contracts,0)}</td>
-        <td>${money(x.cost)}</td><td>${money(x.revenue)}</td>
-        <td class="${x.pl>0?'up':'down'}">${signed(x.pl)}</td></tr>`).join('')}
+    ? `<p class="muted">Nothing has settled${ps.length
+        ? ` — ${ps.length} position(s) still open`:''}. No P/L to report yet.</p>`
+    : `<div class="scroll"><table><thead><tr>
+      <th class="l">Settled</th><th class="l">Sport</th><th class="l">Backed</th>
+      <th>Contracts</th><th>Cost</th><th>Returned</th><th>P/L</th>
+      </tr></thead><tbody>${ss.map(x=>`<tr>
+      <td class="l dim">${localTime(x.at)}</td><td class="l dim">${x.sport}</td>
+      <td class="l">${x.backing}</td><td>${num(x.contracts,0)}</td>
+      <td>${money(x.cost)}</td><td>${money(x.revenue)}</td>
+      <td class="${cls(x.pl)}">${signed(x.pl)}</td></tr>`).join('')}
       </tbody></table></div>`);
 }
+
 
 async function viewToday(){
   $('#view').innerHTML = `

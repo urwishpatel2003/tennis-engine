@@ -205,6 +205,59 @@ check("and the account total is still visible for comparison",
       str(empty["scope_counts"]))
 
 
+print("")
+print("10. sport is derived from the ticker series")
+# The account holds MLB and tennis together. Mixing them makes the tennis
+# numbers meaningless, so every row carries a sport and the totals split by it.
+kalshi.settlements = lambda limit=200: SETTLEMENTS + [MANUAL]
+kalshi.positions = lambda limit=200: POSITIONS
+kalshi.orders = lambda limit=200, status=None: ORDERS
+risk.placed_here = lambda: {"tickers": set(ALL_TICKERS) | {MANUAL["ticker"]},
+                            "order_ids": set()}
+kalshi.market = lambda t: {"yes_sub_title": "Diane Parry", "yes_bid_dollars": "0.3000"}
+d3 = server.app.test_client().get("/api/kalshi/report").get_json()
+
+sports = {b["sport"]: b for b in d3["by_sport"]}
+check("WTA is named from KXWTAMATCH", "WTA" in sports, str(list(sports)))
+check("an unknown series is not lumped into 'other'",
+      any(s not in ("WTA", "ATP") for s in sports), str(list(sports)))
+check("every settlement carries a sport",
+      all(s.get("sport") for s in d3["settlements"]))
+check("every order carries a sport", all(o.get("sport") for o in d3["orders"]))
+check("every position carries a sport", all(x.get("sport") for x in d3["positions"]))
+
+wta = sports["WTA"]
+check("WTA staked is only the tennis markets", wta["staked"] == 70.0, str(wta))
+check("WTA P/L excludes the other sport", wta["realised_pl"] == 29.65, str(wta))
+check("WTA win rate is per sport", wta["win_pct"] == 50.0, str(wta))
+other = [b for s, b in sports.items() if s not in ("WTA", "ATP")][0]
+check("the other sport keeps its own P/L", other["realised_pl"] == 5.0, str(other))
+check("sports sum to the overall realised",
+      round(sum(b["realised_pl"] for b in d3["by_sport"]), 2)
+      == d3["record"]["realised_pl"], str(d3["record"]))
+
+print("")
+print("11. open positions are marked to the BID")
+# The ask is what a buyer pays. Marking a position at the ask says it is worth
+# what it would cost to buy again, which overstates it on every wide book.
+pos = d3["positions"][0]
+check("the bid is used", pos["bid"] == 0.30, str(pos))
+check("mark is contracts x bid", pos["mark"] == round(25 * 0.30, 2), str(pos))
+check("unrealised is mark minus cost",
+      pos["unrealised"] == round(pos["mark"] - pos["traded"], 2), str(pos))
+check("total return counts open positions",
+      d3["record"]["total_return"]
+      == round(d3["record"]["realised_pl"] + d3["record"]["open_unrealised"], 2),
+      str(d3["record"]))
+
+kalshi.market = lambda t: {"yes_sub_title": "Diane Parry", "yes_bid_dollars": None}
+d4 = server.app.test_client().get("/api/kalshi/report").get_json()
+check("an empty book marks the position at zero, not at cost",
+      d4["positions"][0]["mark"] == 0.0, str(d4["positions"][0]))
+check("and the loss shows as unrealised",
+      d4["positions"][0]["unrealised"] == -12.5, str(d4["positions"][0]))
+
+
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")
 print(f"{'='*54}\n")

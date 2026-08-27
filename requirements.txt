@@ -10,3 +10,7 @@ pyarrow>=14.0.0
 numpy>=1.26.0
 flask>=3.0.0
 gunicorn>=21.2.0   # production WSGI server (Linux); Flask's dev server is local-only
+
+# Kalshi auth signs requests with RSA-PSS; stdlib has no RSA. Added deliberately
+# for the Kalshi read/sizing path, which the daily refresh does not use.
+cryptography>=42.0.0

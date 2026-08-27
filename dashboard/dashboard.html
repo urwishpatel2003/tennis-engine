@@ -110,6 +110,19 @@ const api = (p,q={}) => fetch(p+'?'+new URLSearchParams(q)).then(r=>r.json());
 const pct = (v,d=1) => v==null?'—':(v*100).toFixed(d)+'%';
 const num = (v,d=0) => v==null?'—':(+v).toFixed(d);
 const surf = s => `<span class="pill ${s}">${s}</span>`;
+/* Times arrive as ISO UTC. They were rendered by slicing the string, which
+   showed UTC to everyone: a 00:30Z match displayed as tomorrow even though it
+   starts this evening in CST. Anything shown to a person goes through here. */
+const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+const TZLABEL = (() => { try {
+    return new Intl.DateTimeFormat(undefined,{timeZoneName:'short'})
+      .formatToParts(new Date()).find(x=>x.type==='timeZoneName')?.value || TZ;
+  } catch(e){ return TZ; } })();
+const localTime = iso => { const d = new Date(iso);
+  return isNaN(d) ? '—' : d.toLocaleString(undefined,
+    {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false}); };
+const localDay = iso => { const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleDateString('en-CA'); };   // YYYY-MM-DD, local
 let META = {tours:['atp'],surfaces:['overall']};
 
 /* ─── routing ─────────────────────────────────────────────────────────────── */
@@ -519,6 +532,7 @@ async function viewToday(){
 
     $('#out').innerHTML = staleBox + `
       <p class="muted">${rows.length} upcoming ·
+        all times ${TZLABEL} ·
         ${Object.keys(byEvent).length} tournament(s) ·
         ${m.credits_remaining!=null?`${(+m.credits_remaining).toLocaleString()} API credits left`:''}
         ${m.already_started?` · ${m.already_started} in play (excluded)`:''}
@@ -536,7 +550,7 @@ async function viewToday(){
           <th title="How much the model trusts its own inputs for this match.">Confidence</th>
         </tr></thead><tbody>
         ${list.map(r=>{
-          const t = String(r.commence_time||'').slice(5,16).replace('T',' ');
+          const t = localTime(r.commence_time);
           const diff = r.disagreement_a==null?null:r.disagreement_a;
           const side = r.best_side ? (r.best_side==='A'?r.player_a:r.player_b) : null;
           const evc = r.best_ev==null?'':(r.best_ev>0?'up':'down');
@@ -546,7 +560,7 @@ async function viewToday(){
              priced differently on the two pages - Alexandrova showed 49.8%
              here and 56.7% there, a 7 point gap that was entirely this. */
           const link = '#/matchup/' + [r.tour, r.player_a, r.player_b, r.surface,
-              r.best_of, r.tournament||'', String(r.commence_time||'').slice(0,10)]
+              r.best_of, r.tournament||'', localDay(r.commence_time)]
               .map(encodeURIComponent).join('|');
           const b = r.bet;
           const call = b

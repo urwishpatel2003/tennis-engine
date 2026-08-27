@@ -52,6 +52,26 @@ from engine import kalshi, kalshi_match, risk
 
 ORDER_PATH = "/portfolio/events/orders"      # V2; /portfolio/orders is deprecated
 
+# Both are REQUIRED by CreateOrderV2Request. Omitting them is a 400
+# missing_parameters, which is how the first live attempt failed.
+#
+# TAKER orders are immediate_or_cancel: take what is resting at our price and
+# cancel the rest. Never good_till_canceled - a resting order is exactly what
+# the drift guard exists to prevent, an order sitting at a price nobody
+# re-examined while the match moves. The cost is that a partial fill is
+# possible, which is the right trade: less exposure than intended is a far
+# smaller problem than an unattended order on a book that swings 20c.
+#
+# fill_or_kill was the alternative. It rules out partials, but on books this
+# thin it would mostly just fail, and a partial fill of a sized position is
+# still a position we wanted.
+TIME_IN_FORCE_TAKER = "immediate_or_cancel"
+TIME_IN_FORCE_MAKER = "good_till_canceled"   # a post-only order must be able to rest
+
+# Cancels OUR taker order if it would cross our own resting order, rather than
+# trading with ourselves.
+SELF_TRADE_PREVENTION = "taker_at_cross"
+
 # How far the ask may move between building a ticket and confirming it, in
 # dollars. A ticket is priced at a moment; a tennis book moves while a match is
 # being played. Two cents is inside the edge the model needs to justify a bet,
@@ -76,7 +96,8 @@ def build_payload(ticker: str, count: int, price: float,
     The V2 order body.
 
     `price` is a fixed-point dollar string and `count` a string, which is what
-    the V2 shape expects. Buying a contract is a bid on that ticker: to back a
+    the V2 shape expects. `time_in_force` and `self_trade_prevention_type` are
+    both required; leaving them out returns 400 missing_parameters. Buying a contract is a bid on that ticker: to back a
     player you bid on THEIR market, never the opponent's.
     """
     return {
@@ -86,6 +107,8 @@ def build_payload(ticker: str, count: int, price: float,
         "price": f"{float(price):.4f}",
         "client_order_id": client_order_id,
         "post_only": bool(post_only),
+        "time_in_force": TIME_IN_FORCE_MAKER if post_only else TIME_IN_FORCE_TAKER,
+        "self_trade_prevention_type": SELF_TRADE_PREVENTION,
     }
 
 
@@ -270,7 +293,7 @@ def create_order(ticker: str, count: int, price: float, client_order_id: str,
     except urllib.error.HTTPError as e:
         detail = ""
         try:
-            detail = e.read().decode("utf-8", "replace")[:250]
+            detail = e.read().decode("utf-8", "replace")[:800]
         except Exception:
             pass
         out["error"] = f"HTTP {e.code}: {detail}"

@@ -29,6 +29,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engine.kalshi_order import (  # noqa: E402
     MAX_PRICE_DRIFT,
+    SELF_TRADE_PREVENTION,
+    TIME_IN_FORCE_MAKER,
+    TIME_IN_FORCE_TAKER,
     build_payload,
     new_client_order_id,
     started,
@@ -147,6 +150,44 @@ cid = new_client_order_id()
 check("the same ticket builds the same order id",
       build_payload(T, 75, 0.31, cid) == build_payload(T, 75, 0.31, cid))
 check("two tickets get different ids", new_client_order_id() != new_client_order_id())
+
+print("")
+print("11. the payload carries every field V2 requires")
+# The first live attempt failed with 400 missing_parameters:
+#   'CreateOrderV2Request.SelfTradePreventionType' failed on the 'required' tag
+#   'CreateOrderV2Request.TimeInForce'             failed on the 'required' tag
+# These assert the shape Kalshi documents, so that omission cannot come back.
+pay = build_payload(T, 109, 0.32, "cid-1")
+for field in ("ticker", "side", "count", "price", "client_order_id",
+              "time_in_force", "self_trade_prevention_type"):
+    check(f"{field} is present", field in pay, str(pay))
+check("count is a fixed-point string", pay["count"] == "109.00", str(pay["count"]))
+check("price is a 4dp string", pay["price"] == "0.3200", str(pay["price"]))
+check("side is a bid", pay["side"] == "bid")
+check("self-trade prevention is a documented value",
+      pay["self_trade_prevention_type"] in ("taker_at_cross", "maker"),
+      pay["self_trade_prevention_type"])
+check("time in force is a documented value",
+      pay["time_in_force"] in ("fill_or_kill", "good_till_canceled",
+                               "immediate_or_cancel"), pay["time_in_force"])
+
+print("")
+print("12. a taker order never rests")
+# The drift guard exists so no order sits at a price nobody re-examined;
+# good_till_canceled on a taker order would reintroduce exactly that.
+check("the default order is immediate_or_cancel",
+      pay["time_in_force"] == "immediate_or_cancel", pay["time_in_force"])
+check("it is not good_till_canceled", pay["time_in_force"] != "good_till_canceled")
+check("post_only is off by default", pay["post_only"] is False)
+maker = build_payload(T, 109, 0.32, "cid-1", post_only=True)
+check("a post-only order is allowed to rest",
+      maker["time_in_force"] == TIME_IN_FORCE_MAKER, maker["time_in_force"])
+check("post_only and immediate_or_cancel are never combined",
+      not (maker["post_only"] and maker["time_in_force"] == TIME_IN_FORCE_TAKER))
+check("the taker and maker settings differ",
+      TIME_IN_FORCE_TAKER != TIME_IN_FORCE_MAKER)
+check("self-trade prevention is set either way",
+      maker["self_trade_prevention_type"] == SELF_TRADE_PREVENTION)
 
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")

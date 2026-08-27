@@ -40,6 +40,10 @@
         border:1px solid var(--line);border-radius:7px;padding:8px 11px;font:inherit}
   button{cursor:pointer;font-weight:600}
   button.primary{background:var(--accent);color:#06221a;border-color:transparent}
+  /* Adding to a position you already hold is a deliberate, secondary act,
+     so it must not look like the primary call to action. */
+  button.ghost{background:transparent;color:var(--dim);font-weight:500;
+               font-size:.85em;padding:2px 8px}
   button:hover{filter:brightness(1.12)}
   table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
   th,td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--line)}
@@ -500,7 +504,10 @@ async function loadKalshi(){
       <td class="dim">$${num(t.fee,2)}</td>
       <td class="${t.ev>0?'up':'down'}">${t.ev>0?'+':''}$${num(t.ev,2)}
         <br><span class="dim">${num(t.ev_pct,1)}%</span></td>
-      <td><button data-k="${i}">Place…</button></td>
+      <td>${t.already_placed
+        ? `<span class="dim">held${t.held?' '+num(t.held,0):''}</span>
+           <br><button class="ghost" data-k="${i}">Add more…</button>`
+        : `<button data-k="${i}">Place…</button>`}</td>
     </tr>`).join('')}
     </tbody></table></div>
     <p class="note">A ticket is not an order. Placing one asks for confirmation
@@ -510,7 +517,15 @@ async function loadKalshi(){
   $('#kal').querySelectorAll('button[data-k]').forEach(btn => {
     btn.onclick = async () => {
       const t = rows[+btn.dataset.k];
+      /* A ticket you already hold is the SAME advice re-read, not new advice.
+         Say so plainly before letting it become a second position. */
       const ok = confirm(
+        (t.already_placed
+          ? `You ALREADY hold ${t.held?num(t.held,0)+' contracts on ':''}this contract.
+This adds to that position — it is not a second bet the model asked for.
+
+`
+          : '') +
         `Place this order?
 
 ${t.backing} to win — ${t.match}

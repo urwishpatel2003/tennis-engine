@@ -474,6 +474,28 @@ def api_kalshi_tickets():
 
     picks = [f for f in fixtures if f.get("bet")]
     events = {t: kalshi_match.open_events(t) for t in ("atp", "wta")}
+
+    # What is ALREADY on this contract. Without this the same recommendation is
+    # offered again every time the page is scanned, and the model does not say
+    # "back Parks twice" - it says back Parks. Doubling a position by re-reading
+    # the same advice is not a second bet, it is the same bet placed twice.
+    #
+    # Positions are authoritative because they reflect FILLS. The ledger is the
+    # fallback for an order that was sent but has not filled yet, which would
+    # otherwise look untouched.
+    held: dict[str, float] = {}
+    try:
+        for pos in kalshi.positions(limit=200):
+            c = kalshi.num(pos.get("position_fp")) or 0.0
+            if c:
+                held[str(pos.get("ticker"))] = c
+    except Exception:
+        pass          # a held-check failure must not stop tickets being shown
+    try:
+        for t in risk.placed_here()["tickers"]:
+            held.setdefault(str(t), 0.0)
+    except Exception:
+        pass
     tickets, skipped = [], []
     for f in picks:
         tour = str(f.get("tour", "atp")).lower()
@@ -535,6 +557,8 @@ def api_kalshi_tickets():
             # Created ONCE here and echoed back on confirm, so a retry after a
             # timeout is recognised by Kalshi rather than doubling the position.
             "offered": offered, "size_capped": capped,
+            "held": held.get(str(market.get("ticker"))),
+            "already_placed": str(market.get("ticker")) in held,
             "client_order_id": kalshi_order.new_client_order_id(),
         })
 

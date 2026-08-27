@@ -1047,6 +1047,30 @@ def _kalshi_selftest() -> None:
     try:
         bal = kalshi.balance()
         print(f"[kalshi] OK - {mode}, balance ${bal.get('dollars')}", flush=True)
+        # Which portfolio sections actually return data, and whether our own
+        # ledger knows about the orders. The Kalshi tab reads all of these; when
+        # it shows nothing, this says which one is empty and which one errored,
+        # instead of leaving it to guesswork from outside the container.
+        for label, fn in (("orders", lambda: kalshi.orders(limit=50)),
+                          ("fills", lambda: kalshi.fills(limit=50)),
+                          ("positions", lambda: kalshi.positions(limit=50)),
+                          ("settlements", lambda: kalshi.settlements(limit=50))):
+            try:
+                rows = fn()
+                sample = str((rows[0] or {}).get("ticker")) if rows else "-"
+                print(f"[kalshi]   {label}: {len(rows)} row(s), first {sample}",
+                      flush=True)
+            except Exception as e:
+                print(f"[kalshi]   {label}: FAILED {type(e).__name__}: "
+                      f"{str(e)[:150]}", flush=True)
+        try:
+            mine = risk.placed_here()
+            print(f"[kalshi]   ledger: {len(mine['tickers'])} ticker(s), "
+                  f"{len(mine['order_ids'])} order id(s) at "
+                  f"{risk._ledger_path()}", flush=True)
+        except Exception as e:
+            print(f"[kalshi]   ledger: FAILED {type(e).__name__}: {str(e)[:150]}",
+                  flush=True)
     except kalshi.KalshiError as e:
         hint = ""
         if e.status == 401:

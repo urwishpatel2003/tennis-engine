@@ -46,6 +46,7 @@ import os
 import urllib.error
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 
 from engine import kalshi, kalshi_match, risk
 
@@ -89,8 +90,31 @@ def build_payload(ticker: str, count: int, price: float,
 
 
 
+def started(market: dict, now: datetime | None = None) -> bool | None:
+    """
+    Has the match begun? None means the market did not say.
+
+    Kalshi carries the scheduled start as `occurrence_datetime`, and a match
+    market stays ACTIVE right through the match - its own early_close_condition
+    reads "this market will close and expire after a winner is declared". So an
+    open market is not evidence that play has not started, and the status check
+    alone would let an in-play ticket through.
+    """
+    raw = market.get("occurrence_datetime")
+    if not raw:
+        return None
+    try:
+        t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) >= t
+
+
 def verify_market(ticker: str, count: int, price: float,
-                  market: dict | None = None) -> dict:
+                  market: dict | None = None,
+                  now: datetime | None = None) -> dict:
     """
     Re-read the market and decide whether this ticket is still the trade.
 
@@ -126,6 +150,20 @@ def verify_market(ticker: str, count: int, price: float,
     status = str(m.get("status") or "").lower()
     if status and status != "active" and status != "open":
         out["reason"] = f"the market is {status}, not open"
+        return out
+
+    # The model priced this before the match. Once play starts the probability
+    # the ticket carries is stale in a way no price band can detect: a set down,
+    # the ask falls, and a bid built on a pre-match number fills against news the
+    # model has never seen. A missing start time is a refusal too - on a money
+    # path, not knowing is not the same as knowing it is fine.
+    began = started(m, now)
+    if began is None:
+        out["reason"] = "the market did not say when the match starts"
+        return out
+    if began:
+        out["reason"] = ("the match has already started; this ticket was priced "
+                         "before it began")
         return out
 
     ask = kalshi_match.ask_price(m)

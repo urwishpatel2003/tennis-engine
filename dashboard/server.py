@@ -498,6 +498,13 @@ def api_kalshi_tickets():
             skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
                             "reason": sized.get("reason") or "sized to nothing"})
             continue
+        # A match already under way is not a ticket. The model priced it before
+        # it began, and Kalshi keeps the market ACTIVE through the match, so
+        # nothing about the market's own status would stop this.
+        if kalshi_order.started(market):
+            skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+                            "reason": "the match has already started"})
+            continue
         # Never ask for more than is actually offered. Sizing past the resting
         # ask either partially fills or walks up the book, and the EV was
         # computed at THIS price, not at whatever the next level costs.

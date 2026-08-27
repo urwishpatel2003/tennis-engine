@@ -570,8 +570,19 @@ def api_kalshi_submit():
                                  "are all required"}), 400
 
     result = kalshi_order.create_order(ticker, count, price, coid)
+    # Log the attempt, not just the sends. A refusal is the interesting event -
+    # it is the guard doing its job - and until now it went only to the browser,
+    # which made "it said refused" impossible to diagnose from the logs.
     if result.get("error"):
+        mkt = result.get("market") or {}
+        print(f"[kalshi] REFUSED {ticker} {count}@{price:.2f}: {result['error']}"
+              + (f" (ask now {mkt.get('ask')}, offered {mkt.get('offered')})"
+                 if mkt.get("ask") is not None or mkt.get("offered") is not None
+                 else ""), flush=True)
         return jsonify({"ok": False, **result}), 400
+    if result.get("sent"):
+        print(f"[kalshi] SENT {ticker} {count}@{price:.2f} -> "
+              f"{json.dumps(result.get('response'))[:300]}", flush=True)
     if result.get("sent"):
         try:
             bet_log.append([{

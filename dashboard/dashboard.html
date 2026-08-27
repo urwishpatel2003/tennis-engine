@@ -494,7 +494,7 @@ async function loadKalshi(){
       <td class="l">${t.backing}</td>
       <td>${pct(t.model_prob)}</td>
       <td>${num(t.price,2)}</td>
-      <td>${t.contracts}</td>
+      <td>${t.contracts}${t.size_capped?`<br><span class="dim">book has ${Math.floor(t.offered)}</span>`:''}</td>
       <td>$${num(t.stake,2)}</td>
       <td class="dim">$${num(t.fee,2)}</td>
       <td class="${t.ev>0?'up':'down'}">${t.ev>0?'+':''}$${num(t.ev,2)}

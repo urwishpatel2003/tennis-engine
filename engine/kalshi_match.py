@@ -131,18 +131,43 @@ def find_market(player_a: str, player_b: str, tour: str,
     return {"ok": False, "reason": "no Kalshi market for this fixture"}
 
 
+def _num(value) -> float | None:
+    """Kalshi V2 returns numbers as strings; treat both shapes as numbers."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def ask_price(market: dict) -> float | None:
     """
     The price a taker pays to buy YES, in dollars.
 
-    `yes_ask` is in cents. No ask means nothing is offered — there is no price
-    to trade at, which is different from a price of zero.
+    Reads `yes_ask_dollars` FIRST. Kalshi's V2 shape carries fixed-point dollar
+    strings - "0.3700" - and leaves the legacy cent field `yes_ask` null, which
+    is the same convention the order endpoint uses for `price`. Reading the cent
+    field made every live market look like it had no offer resting, so every
+    ticket was refused and the feature could never have produced a trade.
+
+    The cent fallback stays for older payload shapes. No ask at all means there
+    is nothing to buy, which is different from a price of zero.
     """
-    ask = market.get("yes_ask")
-    if ask is None:
-        return None
-    try:
-        p = float(ask) / 100.0
-    except (TypeError, ValueError):
+    p = _num(market.get("yes_ask_dollars"))
+    if p is None:
+        cents = _num(market.get("yes_ask"))
+        p = cents / 100.0 if cents is not None else None
+    if p is None:
         return None
     return p if 0.0 < p < 1.0 else None
+
+
+def ask_size(market: dict) -> float | None:
+    """
+    How many contracts are actually offered at the ask.
+
+    Sizing past this either partially fills or walks up the book, so a ticket is
+    capped at what is really there rather than at what we would like.
+    """
+    return _num(market.get("yes_ask_size_fp"))

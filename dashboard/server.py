@@ -498,6 +498,25 @@ def api_kalshi_tickets():
             skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
                             "reason": sized.get("reason") or "sized to nothing"})
             continue
+        # Never ask for more than is actually offered. Sizing past the resting
+        # ask either partially fills or walks up the book, and the EV was
+        # computed at THIS price, not at whatever the next level costs.
+        offered = kalshi_match.ask_size(market)
+        capped = False
+        if offered is not None and sized["contracts"] > int(offered):
+            if int(offered) < 1:
+                skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+                                "reason": "nothing offered at the ask"})
+                continue
+            capped = True
+            sized = kalshi.size_position(
+                prob, price, bankroll, maker=risk.MAKER,
+                max_stake_pct=min(budget["ticket_pct"],
+                                  100.0 * int(offered) * price / max(bankroll, 1e-9)))
+            if sized["contracts"] < 1:
+                skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+                                "reason": "offered size too small to trade"})
+                continue
         tickets.append({
             "match": f"{f['player_a']} v {f['player_b']}",
             "tournament": f.get("tournament"), "tour": tour,
@@ -508,6 +527,7 @@ def api_kalshi_tickets():
             "fee": sized["fee"], "ev": sized["ev"], "ev_pct": sized["ev_pct"],
             # Created ONCE here and echoed back on confirm, so a retry after a
             # timeout is recognised by Kalshi rather than doubling the position.
+            "offered": offered, "size_capped": capped,
             "client_order_id": kalshi_order.new_client_order_id(),
         })
 

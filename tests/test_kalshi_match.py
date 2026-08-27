@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from engine.kalshi_match import (  # noqa: E402
     SERIES,
     ask_price,
+    ask_size,
     find_market,
     norm,
     surname,
@@ -127,12 +128,29 @@ check("two candidate events are refused, not guessed between",
       not amb["ok"] and "ambiguous" in (amb.get("reason") or ""), str(amb))
 check("surname helper takes the last token", surname("Daniel Merida Aguilar") == "aguilar")
 
-print("\n6. prices")
-check("an ask in cents becomes dollars", ask_price({"yes_ask": 41}) == 0.41)
-check("no ask means no price", ask_price({"yes_ask": None}) is None)
-check("a nonsense ask is refused", ask_price({"yes_ask": 0}) is None
-      and ask_price({"yes_ask": 100}) is None)
+print("")
+print("6. prices come from the V2 dollar fields")
+# The bug this guards: Kalshi V2 carries fixed-point dollar STRINGS and leaves
+# the legacy cent field null. Reading the cent field made every live market
+# look like it had no offer, so every ticket was refused and the feature could
+# never have produced a trade at all.
+check("a dollar string is read", ask_price({"yes_ask_dollars": "0.3700"}) == 0.37)
+check("dollars win over a null cent field",
+      ask_price({"yes_ask_dollars": "0.6400", "yes_ask": None}) == 0.64)
+check("the cent field still works as a fallback", ask_price({"yes_ask": 41}) == 0.41)
+check("no ask at all means no price", ask_price({"yes_ask": None}) is None)
 check("a missing field is refused", ask_price({}) is None)
+check("a nonsense ask is refused",
+      ask_price({"yes_ask_dollars": "0.0000"}) is None
+      and ask_price({"yes_ask_dollars": "1.0000"}) is None)
+check("junk is refused rather than raising",
+      ask_price({"yes_ask_dollars": "abc"}) is None)
+
+print("")
+print("7. offered size caps what we can ask for")
+check("size is read as a number", ask_size({"yes_ask_size_fp": "106.70"}) == 106.7)
+check("a missing size is None", ask_size({}) is None)
+check("junk size is None", ask_size({"yes_ask_size_fp": "x"}) is None)
 
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")

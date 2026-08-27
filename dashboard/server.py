@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engine.predict import Engine  # noqa: E402
 from engine import bet_log  # noqa: E402
+from engine import kalshi  # noqa: E402
 from engine import live_feed  # noqa: E402
 from engine.live_state import leverage, win_prob_from_state  # noqa: E402
 from engine.schema import (  # noqa: E402
@@ -654,6 +655,36 @@ def _live_feed_selftest() -> None:
         print(f"[live] FAILED - {type(e).__name__}: {e}", flush=True)
 
 
+def _kalshi_selftest() -> None:
+    """
+    Report at boot whether the Kalshi credentials work, and what the balance is.
+
+    Nothing outside the container can check this: the credentials live here, and
+    a bad paste otherwise only surfaces when somebody presses a button expecting
+    a trade ticket. This distinguishes the three failures that look alike from
+    the outside - a key that will not parse, a key that parses but is rejected,
+    and a key aimed at the wrong environment.
+
+    Reads only. It never prints the key, and there is no code path here that
+    places an order.
+    """
+    if not kalshi.configured():
+        print("[kalshi] credentials not set - sizing disabled", flush=True)
+        return
+    mode = "LIVE (real money)" if kalshi.live_mode() else "demo"
+    try:
+        bal = kalshi.balance()
+        print(f"[kalshi] OK - {mode}, balance ${bal.get('dollars')}", flush=True)
+    except kalshi.KalshiError as e:
+        hint = ""
+        if e.status == 401:
+            hint = (" - the key was rejected. A demo key cannot sign production "
+                    "requests, or vice versa; KALSHI_LIVE decides which is used")
+        print(f"[kalshi] FAILED ({mode}) - {e}{hint}", flush=True)
+    except Exception as e:  # noqa: BLE001 - never break boot over an optional feature
+        print(f"[kalshi] FAILED ({mode}) - {type(e).__name__}: {str(e)[:140]}", flush=True)
+
+
 def _start_refresh_thread() -> None:
     if os.environ.get("REFRESH_DAILY") == "1" or os.environ.get("REFRESH_ON_BOOT") == "1":
         threading.Thread(target=_refresh_loop, name="refresh", daemon=True).start()
@@ -771,6 +802,7 @@ def api_backtest():
 
 _start_refresh_thread()
 _live_feed_selftest()
+_kalshi_selftest()
 
 
 if __name__ == "__main__":

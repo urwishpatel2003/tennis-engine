@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dashboard import server  # noqa: E402
-from engine import kalshi  # noqa: E402
+from engine import kalshi, risk  # noqa: E402
 
 PASS = FAIL = 0
 
@@ -88,6 +88,12 @@ kalshi.positions = lambda limit=200: POSITIONS
 kalshi.settlements = lambda limit=200: SETTLEMENTS
 kalshi.market = lambda t: {"yes_sub_title": "Diane Parry"}
 
+# The report defaults to "what this page sent", so the fixtures need a ledger
+# saying these tickers came from here. Section 8 varies this deliberately.
+ALL_TICKERS = {str(r.get("ticker")) for r in
+               (SETTLEMENTS + ORDERS + POSITIONS)}
+risk.placed_here = lambda: {"tickers": set(ALL_TICKERS), "order_ids": set()}
+
 d = server.app.test_client().get("/api/kalshi/report").get_json()
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -143,6 +149,61 @@ check("the failure is reported", "settlements" in (d2.get("errors") or {}), str(
 check("the sections that worked still have data", len(d2.get("orders") or []) == 2)
 check("the record degrades to empty rather than lying",
       d2["record"]["settled"] == 0 and d2["record"]["realised_pl"] == 0, str(d2["record"]))
+
+print("")
+print("8. the record is scoped to what THIS page sent")
+# Kalshi's portfolio endpoints return the whole account. A manual trade placed
+# by hand in the app must not be credited to the model.
+MANUAL = {"ticker": "KXNBA-26AUG27LALBOS-LAL", "market_result": "yes",
+          "yes_count_fp": "10.00", "yes_total_cost_dollars": "5.0000",
+          "no_count_fp": "0.00", "no_total_cost_dollars": "0.0000",
+          "revenue": 1000, "fee_cost": "0.0000",
+          "settled_time": "2026-08-28T04:00:00Z"}
+kalshi.settlements = lambda limit=200: SETTLEMENTS + [MANUAL]
+kalshi.orders = lambda limit=200, status=None: ORDERS
+risk.placed_here = lambda: {
+    "tickers": {"KXWTAMATCH-26AUG27TAUPAR-PAR", "KXWTAMATCH-26AUG27PARANN-PAR",
+                "KXATPMATCH-26AUG27AAABBB-AAA"},
+    "order_ids": set()}
+
+cli = server.app.test_client()
+page = cli.get("/api/kalshi/report").get_json()
+check("the default scope is this page", page.get("scope") == "page", str(page.get("scope")))
+check("the manual NBA trade is excluded", len(page["settlements"]) == 2,
+      str([s["ticker"] for s in page["settlements"]]))
+check("its winnings are NOT in the P/L", page["record"]["realised_pl"] == 29.65,
+      str(page["record"]))
+check("the hidden count is reported",
+      page["scope_counts"]["settlements"]["account"] == 3
+      and page["scope_counts"]["settlements"]["shown"] == 2,
+      str(page["scope_counts"]))
+
+acct = cli.get("/api/kalshi/report?scope=account").get_json()
+check("the whole account can still be seen", len(acct["settlements"]) == 3,
+      str(len(acct["settlements"])))
+check("and then the manual trade does count",
+      acct["record"]["realised_pl"] == round(29.65 + 5.0, 2), str(acct["record"]))
+
+tennis = cli.get("/api/kalshi/report?scope=tennis").get_json()
+check("tennis scope keeps both tennis markets", len(tennis["settlements"]) == 2)
+check("tennis scope drops the NBA market",
+      all("KXNBA" not in s["ticker"] for s in tennis["settlements"]))
+
+check("an unknown scope falls back to the safe one",
+      cli.get("/api/kalshi/report?scope=nonsense").get_json()["scope"] == "page")
+
+print("")
+print("9. an empty ledger shows nothing rather than everything")
+# The dangerous failure: a missing ledger reading as "no filter" and reporting
+# the entire account as the model's record.
+risk.placed_here = lambda: {"tickers": set(), "order_ids": set()}
+empty = cli.get("/api/kalshi/report").get_json()
+check("no ledger means no claimed trades", empty["record"]["settled"] == 0,
+      str(empty["record"]))
+check("and the account total is still visible for comparison",
+      empty["scope_counts"]["settlements"]["account"] == 3,
+      str(empty["scope_counts"]))
+
 
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")

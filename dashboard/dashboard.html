@@ -554,6 +554,16 @@ ${t.backing} to win — ${t.match}
 async function viewKalshi(){
   $('#view').innerHTML = `
     <div class="card"><h2>Account</h2><div id="kacct" class="muted">loading…</div></div>
+    <div class="card"><h2>Showing</h2>
+      <div class="row"><div><label>Scope</label><select id="kscope">
+        <option value="page">Placed from this page</option>
+        <option value="tennis">Any ATP/WTA market</option>
+        <option value="account">Whole Kalshi account</option>
+      </select></div></div>
+      <p class="note" id="kscopenote">Kalshi's portfolio covers your whole
+        account, so anything you trade by hand in the app appears there too.
+        The default is the orders this page actually sent — that is the only
+        set that reflects the model.</p></div>
     <div class="card"><h2>Tickets to place</h2>
       <p class="note">The model's current recommendations, sized to the account.
         A ticket is not an order — placing one asks for confirmation first.</p>
@@ -568,14 +578,15 @@ async function viewKalshi(){
       <div id="krec" class="muted">loading…</div></div>`;
   loadKalshi();
   loadKalshiReport();
+  $('#kscope').onchange = () => loadKalshiReport($('#kscope').value);
 }
 
 const money = (v,d=2) => v==null?'—':(v<0?'-$':'$')+Math.abs(+v).toFixed(d);
 const signed = (v,d=2) => v==null?'—':(v>0?'+':'')+money(v,d).replace('$','$');
 
-async function loadKalshiReport(){
+async function loadKalshiReport(scope){
   let d;
-  try { d = await api('/api/kalshi/report'); }
+  try { d = await api('/api/kalshi/report', scope?{scope}:{}); }
   catch(e){ $('#kacct').innerHTML = `<div class="err">${e}</div>`; return; }
   if(d.available === false){
     ['#kacct','#kord','#kpos','#krec'].forEach(x=>{ if($(x))
@@ -585,6 +596,16 @@ async function loadKalshiReport(){
   const b = d.budget||{}, c = d.caps||{}, r = d.record||{};
   const err = k => d.errors && d.errors[k]
     ? `<div class="err">${k}: ${d.errors[k]}</div>` : '';
+
+  const sc = d.scope_counts||{};
+  const hidden = Object.values(sc).reduce((n,x)=>n+((x.account||0)-(x.shown||0)),0);
+  if($('#kscopenote') && d.scope!=='account')
+    $('#kscopenote').innerHTML = hidden
+      ? `Showing ${d.scope==='page'?'orders placed from this page':'ATP/WTA markets'}.
+         <b>${hidden}</b> account record(s) hidden — trades made elsewhere on
+         Kalshi are not the model's.`
+      : `Showing ${d.scope==='page'?'orders placed from this page':'ATP/WTA markets'}.
+         Nothing else on the account to hide.`;
 
   $('#kacct').innerHTML = err('balance') + `<div class="scroll"><table><tbody>
     <tr><td class="l">Balance</td><td>${money(d.balance)}</td>

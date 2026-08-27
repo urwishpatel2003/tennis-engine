@@ -308,5 +308,5 @@ def create_order(ticker: str, count: int, price: float, client_order_id: str,
         return out
 
     # Only a confirmed send consumes the day's budget.
-    risk.record_commit(cost, ticker, int(count))
+    risk.record_commit(cost, ticker, int(count), client_order_id)
     return out

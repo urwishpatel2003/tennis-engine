@@ -593,6 +593,42 @@ def api_kalshi_report():
     raw_pos = pull("positions", lambda: kalshi.positions(limit=200), [])
     raw_settle = pull("settlements", lambda: kalshi.settlements(limit=200), [])
 
+    # SCOPE. Kalshi's portfolio endpoints return the whole ACCOUNT - every
+    # market, including trades placed by hand in the app and anything that is
+    # not tennis. Reporting that as "the record" would credit the model with
+    # trades it never made, so the default is the orders this page actually
+    # sent, taken from our own ledger.
+    #
+    #   page     what this application sent, by client_order_id and ticker
+    #   tennis   any ATP/WTA singles market, however it was traded
+    #   account  everything, unfiltered
+    scope = str(request.args.get("scope", "page")).lower()
+    if scope not in ("page", "tennis", "account"):
+        scope = "page"
+    mine = pull("ledger", risk.placed_here, {"tickers": set(), "order_ids": set()})
+    out["scope"] = scope
+    out["scope_counts"] = {}
+
+    def ours(rec: dict) -> bool:
+        if scope == "account":
+            return True
+        t = str(rec.get("ticker") or rec.get("market_ticker") or "")
+        if scope == "tennis":
+            return t.startswith("KXATPMATCH") or t.startswith("KXWTAMATCH")
+        # A resting order carries our client_order_id; a fill or settlement does
+        # not, so those fall back to the ticker.
+        coid = str(rec.get("client_order_id") or "")
+        return (coid in mine["order_ids"]) or (t in mine["tickers"])
+
+    for label, rows in (("orders", raw_orders), ("fills", raw_fills),
+                        ("positions", raw_pos), ("settlements", raw_settle)):
+        out["scope_counts"][label] = {"account": len(rows),
+                                      "shown": sum(1 for r in rows if ours(r))}
+    raw_orders = [r for r in raw_orders if ours(r)]
+    raw_fills = [r for r in raw_fills if ours(r)]
+    raw_pos = [r for r in raw_pos if ours(r)]
+    raw_settle = [r for r in raw_settle if ours(r)]
+
     # Tickers are opaque; a person reading this wants player names. Resolve each
     # ticker once, and let a lookup failure degrade to the ticker rather than
     # taking the page down with it.

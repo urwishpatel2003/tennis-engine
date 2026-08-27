@@ -71,12 +71,22 @@ def committed_today() -> float:
     return round(total, 2)
 
 
-def record_commit(stake: float, ticker: str, contracts: int) -> None:
-    """Record a CONFIRMED commitment. Called after a person presses the button."""
+def record_commit(stake: float, ticker: str, contracts: int,
+                  client_order_id: str | None = None) -> None:
+    """
+    Record a CONFIRMED commitment. Called after a person presses the button.
+
+    The client_order_id is stored alongside the ticker because this ledger is
+    the only record of which orders came from THIS application. The account
+    history cannot answer that: Kalshi does not distinguish an order this page
+    sent from one placed by hand in the app, and a record that quietly absorbed
+    manual trades would not be a record of the model.
+    """
     p = _ledger_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     row = {"day": _today(), "stake": round(float(stake), 2),
            "ticker": ticker, "contracts": int(contracts),
+           "client_order_id": client_order_id,
            "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     with p.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row) + "\n")
@@ -102,3 +112,31 @@ def budget(bankroll: float) -> dict:
             "daily_remaining": round(remaining, 2),
             "ticket_pct": round(max(ticket_pct, 0.0), 4),
             "exhausted": remaining <= 0.0}
+
+
+
+def placed_here() -> dict:
+    """
+    What this application actually sent: {"tickers": set, "order_ids": set}.
+
+    Order ids are exact. Tickers are the fallback for rows written before ids
+    were stored, and for fills, positions and settlements, which carry a ticker
+    but never our client_order_id.
+    """
+    out = {"tickers": set(), "order_ids": set()}
+    p = _ledger_path()
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("ticker"):
+            out["tickers"].add(str(row["ticker"]))
+        if row.get("client_order_id"):
+            out["order_ids"].add(str(row["client_order_id"]))
+    return out

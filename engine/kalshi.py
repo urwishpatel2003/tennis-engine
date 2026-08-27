@@ -27,10 +27,19 @@ marginal.
 
 Sizing
 ------
-Quarter Kelly, not full. Kelly assumes the probability is KNOWN; ours is
-estimated, and its error was measured at about 1.6 points at p=0.10 — often
-larger than the edge itself. Kelly on an estimated probability systematically
-over-bets, and a quarter is the standard discipline for that.
+Full Kelly, by the operator's decision, overridable with KALSHI_KELLY_FRACTION.
+
+The trade-off was measured rather than argued. Against a 2% per-ticket cap, full
+and quarter Kelly produce the SAME stake on a strong edge — 20.9% and 5.2% of
+bankroll both clip to 2% — so the fraction buys nothing where the model is
+confident. They diverge only on thin edges: at a model 52% against a 50c price,
+full stakes twice what a quarter would.
+
+That divergence is the part worth knowing. Kelly assumes the probability is
+KNOWN; ours is estimated, with an error measured near 1.6 points at p=0.10,
+which is comparable to a thin edge itself. So full Kelly is largest exactly where
+the input is least reliable. The per-ticket and daily caps in engine/risk.py are
+what bound that, not the fraction.
 """
 
 from __future__ import annotations
@@ -49,7 +58,7 @@ PROD_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
 FEE_RATE = 0.07          # Kalshi's published trading fee coefficient
 MAKER_SHARE = 0.25       # makers pay roughly a quarter of the taker fee
-KELLY_FRACTION = 0.25    # quarter Kelly
+KELLY_FRACTION = float(os.environ.get("KALSHI_KELLY_FRACTION", "1.0"))
 
 
 class KalshiError(RuntimeError):

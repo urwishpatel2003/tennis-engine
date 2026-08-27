@@ -594,9 +594,9 @@ async function viewKalshi(){
       <div class="row" style="justify-content:space-between;align-items:flex-end">
         <h2 style="margin:0">Kalshi</h2>
         <div><label>Showing</label><select id="kscope">
-          <option value="page">Placed from this page</option>
-          <option value="tennis">Any ATP/WTA market</option>
-          <option value="account">Whole Kalshi account</option>
+          <option value="page">This model only</option>
+          <option value="tennis">All tennis (incl. your own)</option>
+          <option value="account">Everything on Kalshi</option>
         </select></div>
       </div>
       <div id="kacct" class="muted">loading…</div>
@@ -655,18 +655,24 @@ async function loadKalshiReport(scope){
 
   const sc = d.scope_counts||{};
   const hidden = Object.values(sc).reduce((n,x)=>n+((x.account||0)-(x.shown||0)),0);
-  const what = {page:'orders placed from this page', tennis:'ATP/WTA markets',
-                account:'your whole Kalshi account'}[d.scope];
-  $('#kscopenote').innerHTML = `Showing <b>${what}</b>.` + (d.scope!=='account'
-    ? (hidden ? ` <b>${hidden}</b> other account record(s) hidden — trades made
-                  elsewhere on Kalshi are not this model's.`
+  const what = {page:'only the orders this page placed',
+                tennis:'all tennis markets, including ones you traded yourself',
+                account:'your entire Kalshi account, every sport'}[d.scope];
+  $('#kscopenote').innerHTML = `Showing <b>${what}</b>.` + (d.scope==='page'
+    ? (hidden ? ` <b>${hidden}</b> other account record(s) hidden.`
               : ' Nothing else on the account to hide.')
-    : ' Includes trades this model never made.');
+    : ` <b>These are not this model's results.</b> Its own record is under
+        “This model only”.`);
 
   /* Performance. Total return and realised lead, because they are the reason to
      open this page; the rest supports them. Realised alone reads as a flat zero
      while everything is still open. */
-  $('#kperf').innerHTML = err('settlements') + `<div class="grid">
+  const whose = {page:'', tennis:'all tennis trades, yours included',
+                 account:'your whole Kalshi account, every sport'}[d.scope];
+  $('#kperf').innerHTML = err('settlements') + (whose
+    ? `<div class="err" style="margin-bottom:12px">Showing <b>${whose}</b> —
+        <b>not this model's performance</b>. The model's own three positions are
+        still open and have never settled.</div>` : '') + `<div class="grid">
       ${stat('Total return', signed(r.total_return), 'realised + open mark',
              cls(r.total_return), true)}
       ${stat('Realised', signed(r.realised_pl),

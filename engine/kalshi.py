@@ -227,3 +227,52 @@ def markets(limit: int = 200, status: str = "open",
     if series:
         path += f"&series_ticker={series}"
     return (_get(path, auth=False).get("markets") or [])
+
+# ──── portfolio, read-only ────────────────────────────────────────────────────
+# Everything below reads. None of it can open, change or close a position; the
+# only code that spends is engine/kalshi_order.py.
+
+
+def num(value) -> float | None:
+    """V2 sends numbers as fixed-point strings. Read both shapes, never raise."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def positions(limit: int = 200) -> list[dict]:
+    """Open positions, one per market. `position_fp` is the contract count."""
+    d = _get(f"/portfolio/positions?limit={int(limit)}")
+    return (d.get("market_positions") or [])
+
+
+def fills(limit: int = 200) -> list[dict]:
+    """Executions. A fill is the only proof an order actually traded."""
+    return (_get(f"/portfolio/fills?limit={int(limit)}").get("fills") or [])
+
+
+def settlements(limit: int = 200) -> list[dict]:
+    """Settled markets. `revenue` is in CENTS, unlike the *_dollars fields."""
+    return (_get(f"/portfolio/settlements?limit={int(limit)}").get("settlements") or [])
+
+
+def orders(limit: int = 200, status: str | None = None) -> list[dict]:
+    """
+    Orders placed, filled or not.
+
+    Kalshi's docs disagree with themselves about where this lives, so try the
+    portfolio path and fall back to the top-level one rather than returning
+    nothing on a 404.
+    """
+    q = f"?limit={int(limit)}" + (f"&status={status}" if status else "")
+    for path in ("/portfolio/orders", "/orders"):
+        try:
+            return (_get(path + q).get("orders") or [])
+        except KalshiError as e:
+            if e.status == 404:
+                continue
+            raise
+    return []

@@ -546,6 +546,150 @@ def api_kalshi_tickets():
     }))
 
 
+@app.route("/api/kalshi/report")
+def api_kalshi_report():
+    """
+    Everything about the Kalshi side of the account, read-only.
+
+    Four questions, four sources, deliberately kept apart because they answer
+    different things and disagreeing is informative:
+
+      orders      what was SENT           - includes the ones that never traded
+      fills       what actually TRADED    - the only proof of a position
+      positions   what is OPEN now        - with unrealised exposure
+      settlements what RESOLVED           - the only source of realised P/L
+
+    An order is not a fill. A submitted order that rests unfilled costs nothing
+    and means nothing, and counting it as a bet would flatter the record. The
+    record here is built from settlements, so it reports money that actually
+    moved.
+    """
+    if not kalshi.configured():
+        return jsonify({"available": False,
+                        "reason": "Kalshi credentials are not set"})
+    out = {"available": True, "live": kalshi.live_mode(),
+           "armed": kalshi_order.armed(), "errors": {}}
+
+    def pull(name, fn, default):
+        # One failing section must not blank the page. Report the failure in
+        # place and render everything that did load.
+        try:
+            return fn()
+        except Exception as e:
+            out["errors"][name] = f"{type(e).__name__}: {str(e)[:120]}"
+            return default
+
+    bal = pull("balance", kalshi.balance, {})
+    bankroll = float(bal.get("dollars") or 0.0)
+    out["balance"] = bal.get("dollars")
+    out["budget"] = risk.budget(bankroll)
+    out["caps"] = {"ticket_pct": risk.MAX_TICKET_PCT, "daily_pct": risk.MAX_DAILY_PCT,
+                   "maker": risk.MAKER,
+                   "kelly_fraction": kalshi.KELLY_FRACTION,
+                   "max_price_drift": kalshi_order.MAX_PRICE_DRIFT}
+
+    raw_orders = pull("orders", lambda: kalshi.orders(limit=200), [])
+    raw_fills = pull("fills", lambda: kalshi.fills(limit=200), [])
+    raw_pos = pull("positions", lambda: kalshi.positions(limit=200), [])
+    raw_settle = pull("settlements", lambda: kalshi.settlements(limit=200), [])
+
+    # Tickers are opaque; a person reading this wants player names. Resolve each
+    # ticker once, and let a lookup failure degrade to the ticker rather than
+    # taking the page down with it.
+    names: dict[str, str] = {}
+
+    def name_of(ticker: str) -> str:
+        t = str(ticker or "")
+        if t and t not in names:
+            try:
+                names[t] = str(kalshi.market(t).get("yes_sub_title") or t)
+            except Exception:
+                names[t] = t
+        return names.get(t, t)
+
+    seen = {str(r.get("ticker") or "") for r in
+            (raw_orders + raw_fills + raw_pos + raw_settle)}
+    for t in list(seen)[:60]:          # bounded: this is one HTTP call each
+        name_of(t)
+
+    n = kalshi.num
+    out["orders"] = [{
+        "order_id": o.get("order_id"), "ticker": o.get("ticker"),
+        "backing": name_of(o.get("ticker")),
+        "status": o.get("status"), "side": o.get("book_side") or o.get("side"),
+        "price": n(o.get("yes_price_dollars")),
+        "placed": n(o.get("initial_count_fp")),
+        "filled": n(o.get("fill_count_fp")),
+        "remaining": n(o.get("remaining_count_fp")),
+        "fees": (n(o.get("taker_fees_dollars")) or 0.0)
+                + (n(o.get("maker_fees_dollars")) or 0.0),
+        "created": o.get("created_time"),
+    } for o in raw_orders]
+
+    out["fills"] = [{
+        "fill_id": f.get("fill_id") or f.get("trade_id"),
+        "order_id": f.get("order_id"),
+        "ticker": f.get("ticker") or f.get("market_ticker"),
+        "backing": name_of(f.get("ticker") or f.get("market_ticker")),
+        "side": f.get("outcome_side"), "taker": f.get("is_taker"),
+        "count": n(f.get("count_fp")),
+        "price": n(f.get("yes_price_dollars")),
+        "fee": n(f.get("fee_cost")),
+        "at": f.get("created_time"),
+    } for f in raw_fills]
+
+    out["positions"] = [{
+        "ticker": p_.get("ticker"), "backing": name_of(p_.get("ticker")),
+        "contracts": n(p_.get("position_fp")),
+        "exposure": n(p_.get("market_exposure_dollars")),
+        "traded": n(p_.get("total_traded_dollars")),
+        "realized": n(p_.get("realized_pnl_dollars")),
+        "fees": n(p_.get("fees_paid_dollars")),
+        "updated": p_.get("last_updated_ts"),
+    } for p_ in raw_pos if (n(p_.get("position_fp")) or 0) != 0]
+
+    settled = []
+    for s_ in raw_settle:
+        # revenue is CENTS while the cost fields are dollars - mixing them is an
+        # easy way to report a P/L that is off by a factor of a hundred.
+        revenue = (n(s_.get("revenue")) or 0.0) / 100.0
+        cost = ((n(s_.get("yes_total_cost_dollars")) or 0.0)
+                + (n(s_.get("no_total_cost_dollars")) or 0.0))
+        fee = n(s_.get("fee_cost")) or 0.0
+        settled.append({
+            "ticker": s_.get("ticker"), "backing": name_of(s_.get("ticker")),
+            "result": s_.get("market_result"),
+            "contracts": n(s_.get("yes_count_fp")) or n(s_.get("no_count_fp")),
+            "cost": round(cost, 2), "revenue": round(revenue, 2),
+            "fee": round(fee, 2), "pl": round(revenue - cost - fee, 2),
+            "at": s_.get("settled_time"),
+        })
+    settled.sort(key=lambda r: str(r.get("at") or ""), reverse=True)
+    out["settlements"] = settled
+
+    staked = sum(r["cost"] for r in settled)
+    realised = sum(r["pl"] for r in settled)
+    wins = sum(1 for r in settled if r["pl"] > 0)
+    out["record"] = {
+        "settled": len(settled), "won": wins, "lost": len(settled) - wins,
+        "win_pct": round(100.0 * wins / len(settled), 1) if settled else None,
+        "staked": round(staked, 2),
+        "realised_pl": round(realised, 2),
+        "fees": round(sum(r["fee"] for r in settled), 2),
+        # ROI on money actually put at risk, which is the number that matters
+        # more than a win rate: one big loser undoes a lot of small winners.
+        "roi_pct": round(100.0 * realised / staked, 1) if staked else None,
+        "open_positions": len(out["positions"]),
+        "open_exposure": round(sum(p_["exposure"] or 0.0
+                                   for p_ in out["positions"]), 2),
+        "orders_sent": len(out["orders"]),
+        "orders_filled": sum(1 for o in out["orders"] if (o["filled"] or 0) > 0),
+        "orders_unfilled": sum(1 for o in out["orders"] if not (o["filled"] or 0)),
+    }
+    return jsonify(_clean(out))
+
+
+
 @app.route("/api/kalshi/submit", methods=["POST"])
 def api_kalshi_submit():
     """

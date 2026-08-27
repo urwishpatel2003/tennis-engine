@@ -1162,6 +1162,29 @@ def _kalshi_selftest() -> None:
                 print(f"[kalshi]   raw settlement: {keep}", flush=True)
         except Exception as e:
             print(f"[kalshi]   raw settlement: FAILED {type(e).__name__}", flush=True)
+        # Reproduce the record sum exactly as the endpoint does, and show the
+        # rows driving it. The per-row maths checks out against the raw data, so
+        # the error is somewhere in the aggregate - and the endpoint's own
+        # arithmetic is the only honest place to look.
+        try:
+            rows = kalshi.settlements(limit=200)
+            calc = []
+            for row in rows:
+                rev = (kalshi.num(row.get("revenue")) or 0.0) / 100.0
+                cst = ((kalshi.num(row.get("yes_total_cost_dollars")) or 0.0)
+                       + (kalshi.num(row.get("no_total_cost_dollars")) or 0.0))
+                fee = kalshi.num(row.get("fee_cost")) or 0.0
+                calc.append((rev - cst - fee, cst, rev, str(row.get("ticker"))))
+            tot = sum(c[0] for c in calc)
+            print(f"[kalshi]   record check: {len(calc)} rows, realised "
+                  f"${tot:,.2f}, staked ${sum(c[1] for c in calc):,.2f}, "
+                  f"returned ${sum(c[2] for c in calc):,.2f}", flush=True)
+            for pl, cst, rev, tk in sorted(calc)[:3]:
+                print(f"[kalshi]     worst: {tk} cost ${cst:,.2f} "
+                      f"returned ${rev:,.2f} -> ${pl:,.2f}", flush=True)
+        except Exception as e:
+            print(f"[kalshi]   record check: FAILED {type(e).__name__}: "
+                  f"{str(e)[:120]}", flush=True)
         try:
             mine = risk.placed_here()
             print(f"[kalshi]   ledger: {len(mine['tickers'])} ticker(s), "

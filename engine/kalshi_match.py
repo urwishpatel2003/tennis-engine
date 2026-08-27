@@ -74,6 +74,12 @@ def open_events(tour: str) -> dict:
         return {}
     events: dict[str, list] = {}
     for m in kalshi.markets(limit=1000, status="open", series=series):
+        # Kalshi's status=open filter is not exact: a live pull returned 40
+        # active markets and 10 already CLOSED ones. Trust the market's own
+        # status over the filter, or tickets get built for matches that have
+        # already finished.
+        if str(m.get("status") or "active").lower() != "active":
+            continue
         ev = m.get("event_ticker")
         if ev:
             events.setdefault(ev, []).append(m)

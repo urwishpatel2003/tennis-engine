@@ -210,6 +210,16 @@ def balance() -> dict:
             "live": live_mode()}
 
 
+def market(ticker: str) -> dict:
+    """
+    One market by ticker, read fresh. Public data, so no signature is needed.
+
+    Used to re-check a price at submit time. A ticket is a snapshot, and a
+    tennis book moves while a match is being played.
+    """
+    return (_get(f"/markets/{ticker}", auth=False).get("market") or {})
+
+
 def markets(limit: int = 200, status: str = "open",
             series: str | None = None) -> list[dict]:
     """Open markets. Public data, so no signature is needed."""

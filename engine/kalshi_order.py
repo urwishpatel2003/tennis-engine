@@ -21,6 +21,15 @@ placing a real order. `dry_run=True` logs precisely what would be sent and sends
 nothing, which is the honest default for an untested write path against real
 money. KALSHI_ARM=1 turns it off.
 
+The ticket is a snapshot, so the market is re-read
+------------------------------------------------
+Between building a ticket and confirming it, the match can start, the book can
+empty and the price can move. All three happened within minutes of the first
+dry run. `verify_market` re-reads the market before anything is sent and refuses
+if it no longer resembles the one the ticket was priced in. The caps say how
+much may be risked; this says whether the thing being bought is still the thing
+that was priced.
+
 Idempotency is the part that bites
 ----------------------------------
 A network timeout can happen AFTER Kalshi accepts an order and before the
@@ -38,9 +47,16 @@ import urllib.error
 import urllib.request
 import uuid
 
-from engine import kalshi, risk
+from engine import kalshi, kalshi_match, risk
 
 ORDER_PATH = "/portfolio/events/orders"      # V2; /portfolio/orders is deprecated
+
+# How far the ask may move between building a ticket and confirming it, in
+# dollars. A ticket is priced at a moment; a tennis book moves while a match is
+# being played. Two cents is inside the edge the model needs to justify a bet,
+# so a drift past it means the ticket is being confirmed against a market that
+# no longer resembles the one it was priced in.
+MAX_PRICE_DRIFT = float(os.environ.get("KALSHI_MAX_PRICE_DRIFT", "0.02"))
 
 
 def armed() -> bool:
@@ -72,6 +88,69 @@ def build_payload(ticker: str, count: int, price: float,
     }
 
 
+
+def verify_market(ticker: str, count: int, price: float,
+                  market: dict | None = None) -> dict:
+    """
+    Re-read the market and decide whether this ticket is still the trade.
+
+    Returns {"ok": bool, "reason": str, "ask": float|None, "offered": float|None}.
+    Pass `market` to check a snapshot instead of fetching one.
+
+    Three ways a ticket goes stale, all seen in live data within minutes of the
+    tickets being built:
+
+    1. THE MARKET CLOSED. The match started or settled. Nothing to buy.
+    2. THE BOOK EMPTIED. No ask resting, so the order would rest rather than
+       fill, at a price set before whatever emptied the book.
+    3. THE PRICE MOVED. This is the one that costs money. If a player drops a
+       set the ask falls, and a stale bid fills immediately at a price that only
+       looked like value against a probability computed before the match began.
+       A bid that has moved the other way simply will not fill, which is merely
+       useless - but it is refused too, so that a resting order is never left
+       behind at a price nobody re-examined.
+
+    It fails closed: if the market cannot be read, that is a refusal, not a
+    shrug. Not knowing the price is not the same as the price being fine.
+    """
+    out = {"ok": False, "reason": "", "ask": None, "offered": None}
+    try:
+        m = kalshi.market(ticker) if market is None else market
+    except Exception as e:
+        out["reason"] = f"could not re-read the market: {type(e).__name__}"
+        return out
+    if not m:
+        out["reason"] = "the market no longer exists"
+        return out
+
+    status = str(m.get("status") or "").lower()
+    if status and status != "active" and status != "open":
+        out["reason"] = f"the market is {status}, not open"
+        return out
+
+    ask = kalshi_match.ask_price(m)
+    offered = kalshi_match.ask_size(m)
+    out["ask"], out["offered"] = ask, offered
+    if ask is None:
+        out["reason"] = "nothing is offered at the ask any more"
+        return out
+
+    drift = ask - float(price)
+    if abs(drift) > MAX_PRICE_DRIFT:
+        direction = "up" if drift > 0 else "down"
+        out["reason"] = (f"the ask moved {direction} from {float(price):.2f} to "
+                         f"{ask:.2f}; rebuild the ticket at the current price")
+        return out
+
+    if offered is not None and int(count) > int(offered):
+        out["reason"] = (f"only {int(offered)} contracts are offered, "
+                         f"not {int(count)}")
+        return out
+
+    out["ok"] = True
+    return out
+
+
 def create_order(ticker: str, count: int, price: float, client_order_id: str,
                  dry_run: bool | None = None, post_only: bool = False) -> dict:
     """
@@ -83,7 +162,7 @@ def create_order(ticker: str, count: int, price: float, client_order_id: str,
     is the wrong place to enforce a spending limit.
     """
     out = {"sent": False, "dry_run": True, "payload": None,
-           "response": None, "error": None}
+           "response": None, "error": None, "market": None}
 
     if not kalshi.configured():
         out["error"] = "Kalshi credentials are not set"
@@ -119,6 +198,16 @@ def create_order(ticker: str, count: int, price: float, client_order_id: str,
     if cost > b["daily_remaining"] + 0.01:
         out["error"] = (f"${cost:.2f} exceeds what remains today "
                         f"(${b['daily_remaining']:.2f})")
+        return out
+
+    # Re-check the market itself, not just our own limits. The caps say how
+    # much may be risked; this says whether the thing being bought is still the
+    # thing that was priced. A dry run runs it too - a guard that only engages
+    # with real money on the line has never been tested.
+    fresh = verify_market(ticker, count, price)
+    out["market"] = fresh
+    if not fresh["ok"]:
+        out["error"] = fresh["reason"]
         return out
 
     payload = build_payload(ticker, count, price, client_order_id, post_only)

@@ -90,6 +90,21 @@
   .scroll{overflow-x:auto}
   .note{font-size:12px;color:var(--dim);border-left:3px solid var(--line);
         padding-left:11px;margin-top:12px}
+
+  /* Typographic hierarchy. Everything was the same weight, so nothing read as
+     more important than anything else. Three levels, and no more: the thing a
+     row is ABOUT, the numbers that decide something, and the supporting detail
+     that should recede. Bold everywhere is the same as bold nowhere. */
+  .key{font-weight:650}                       /* what the row is about */
+  .sub{display:block;font-size:11px;color:var(--dim);font-weight:400;
+       font-variant-numeric:tabular-nums}     /* the identifier under it */
+  td.fig{font-weight:650}                     /* a number that decides something */
+  td.lead{font-weight:700;font-size:15px}     /* the P/L column */
+  .tag{display:inline-block;padding:1px 7px;border-radius:5px;font-size:10px;
+       font-weight:700;letter-spacing:.4px;background:var(--panel2);
+       color:var(--dim);text-transform:uppercase}
+  .stat.hero .v{font-size:24px}
+  .stat.hero{background:var(--panel2);border:1px solid var(--line)}
 </style>
 </head>
 <body>
@@ -491,18 +506,18 @@ async function loadKalshi(){
     return;
   }
   $('#kal').innerHTML = head + `<div class="scroll"><table><thead><tr>
-      <th class="l">Match</th><th class="l">Backing</th><th>Model</th><th>Price</th>
+      <th class="l">Backing</th><th>Model</th><th>Price</th>
       <th>Contracts</th><th>Stake</th><th>Fee</th><th>EV</th><th></th>
     </tr></thead><tbody>
     ${rows.map((t,i)=>`<tr>
-      <td class="l">${t.match}<br><span class="dim">${t.ticker}</span></td>
-      <td class="l">${t.backing}</td>
-      <td>${pct(t.model_prob)}</td>
-      <td>${num(t.price,2)}</td>
+      <td class="l"><span class="key">${t.backing}</span>
+        <span class="sub">${t.match} · ${t.ticker}</span></td>
+      <td class="fig">${pct(t.model_prob)}</td>
+      <td class="fig">${num(t.price,2)}</td>
       <td>${t.contracts}${t.size_capped?`<br><span class="dim">book has ${Math.floor(t.offered)}</span>`:''}</td>
-      <td>$${num(t.stake,2)}</td>
+      <td class="fig">$${num(t.stake,2)}</td>
       <td class="dim">$${num(t.fee,2)}</td>
-      <td class="${t.ev>0?'up':'down'}">${t.ev>0?'+':''}$${num(t.ev,2)}
+      <td class="lead ${t.ev>0?'up':'down'}">${t.ev>0?'+':''}$${num(t.ev,2)}
         <br><span class="dim">${num(t.ev_pct,1)}%</span></td>
       <td>${t.already_placed
         ? `<span class="dim">held${t.held?' '+num(t.held,0):''}</span>
@@ -603,13 +618,15 @@ async function viewKalshi(){
 const money = (v,d=2) => v==null?'—':(v<0?'-$':'$')+Math.abs(+v).toFixed(d);
 const signed = (v,d=2) => v==null?'—':(v>0?'+':'')+money(v,d);
 const cls = v => v>0?'up':(v<0?'down':'');
-/* A number with a label under it. The headline figures are the reason to open
-   this page, so they should not be buried in a table of key/value rows. */
-const kpi = (label, value, sub, klass) => `
-  <div style="min-width:120px;flex:1">
-    <div class="${klass||''}" style="font-size:1.5em;font-weight:650">${value}</div>
-    <div class="dim" style="font-size:.85em">${label}</div>
-    ${sub?`<div class="dim" style="font-size:.8em">${sub}</div>`:''}
+/* Reuses the .stat block the rest of the dashboard already uses, rather than
+   inventing a second look for the same idea. `hero` marks the two figures worth
+   reading first; the others are the same size as each other so they do not all
+   compete for attention. */
+const stat = (label, value, sub, klass, hero) => `
+  <div class="stat${hero?' hero':''}">
+    <div class="k">${label}</div>
+    <div class="v ${klass||''}">${value}</div>
+    ${sub?`<div class="s">${sub}</div>`:''}
   </div>`;
 
 async function loadKalshiReport(scope){
@@ -625,15 +642,15 @@ async function loadKalshiReport(scope){
   const err = k => d.errors && d.errors[k]
     ? `<div class="err">${k}: ${d.errors[k]}</div>` : '';
 
-  $('#kacct').innerHTML = err('balance') +
-    `<div class="row" style="gap:24px;flex-wrap:wrap;margin-top:10px">
-      ${kpi('Balance', money(d.balance), d.live?'live account':'demo')}
-      ${kpi('Per ticket', money(b.bankroll*c.ticket_pct/100), c.ticket_pct+'% of bankroll')}
-      ${kpi('Used today', money(b.committed),
-            money(b.daily_remaining)+' left of '+money(b.daily_cap))}
-      ${kpi('Mode', d.armed?'ARMED':'safe',
-            d.armed?'confirmed tickets are sent':'tickets are logged only',
-            d.armed?'down':'dim')}
+  $('#kacct').innerHTML = err('balance') + `<div class="grid">
+      ${stat('Balance', money(d.balance), d.live?'live account':'demo', '', true)}
+      ${stat('Per ticket', money(b.bankroll*c.ticket_pct/100),
+             c.ticket_pct+'% of bankroll')}
+      ${stat('Used today', money(b.committed),
+             money(b.daily_remaining)+' left of '+money(b.daily_cap))}
+      ${stat('Mode', d.armed?'ARMED':'Safe',
+             d.armed?'confirmed tickets are sent':'tickets are logged only',
+             d.armed?'down':'dim')}
     </div>`;
 
   const sc = d.scope_counts||{};
@@ -641,57 +658,58 @@ async function loadKalshiReport(scope){
   const what = {page:'orders placed from this page', tennis:'ATP/WTA markets',
                 account:'your whole Kalshi account'}[d.scope];
   $('#kscopenote').innerHTML = `Showing <b>${what}</b>.` + (d.scope!=='account'
-    ? (hidden ? ` ${hidden} other account record(s) hidden — trades made elsewhere
-                  on Kalshi are not this model's.`
+    ? (hidden ? ` <b>${hidden}</b> other account record(s) hidden — trades made
+                  elsewhere on Kalshi are not this model's.`
               : ' Nothing else on the account to hide.')
     : ' Includes trades this model never made.');
 
-  /* Performance. Realised P/L alone reads as a flat zero while everything is
-     still open, so the open mark sits beside it rather than instead of it. */
-  $('#kperf').innerHTML = err('settlements') +
-    `<div class="row" style="gap:24px;flex-wrap:wrap">
-      ${kpi('Total return', signed(r.total_return), 'realised + open mark',
-            cls(r.total_return))}
-      ${kpi('Realised', signed(r.realised_pl),
-            r.settled?`${r.settled} settled${r.roi_pct!=null?' · '+r.roi_pct+'% ROI':''}`
-                     :'nothing settled yet', cls(r.realised_pl))}
-      ${kpi('Open', money(r.open_exposure),
-            `${r.open_positions} position(s) · mark ${money(r.open_mark)}`)}
-      ${kpi('Unrealised', signed(r.open_unrealised), 'mark vs cost',
-            cls(r.open_unrealised))}
-      ${kpi('Record', r.settled?`${r.won}–${r.lost}`:'—',
-            r.win_pct!=null?r.win_pct+'% win rate':'')}
-      ${kpi('Fees', money(r.fees), `${r.orders_filled}/${r.orders_sent} orders filled`)}
+  /* Performance. Total return and realised lead, because they are the reason to
+     open this page; the rest supports them. Realised alone reads as a flat zero
+     while everything is still open. */
+  $('#kperf').innerHTML = err('settlements') + `<div class="grid">
+      ${stat('Total return', signed(r.total_return), 'realised + open mark',
+             cls(r.total_return), true)}
+      ${stat('Realised', signed(r.realised_pl),
+             r.settled?`${r.settled} settled${r.roi_pct!=null?' · '+r.roi_pct+'% ROI':''}`
+                      :'nothing settled yet', cls(r.realised_pl), true)}
+      ${stat('Open exposure', money(r.open_exposure),
+             `${r.open_positions} position(s) · mark ${money(r.open_mark)}`)}
+      ${stat('Unrealised', signed(r.open_unrealised), 'mark vs cost',
+             cls(r.open_unrealised))}
+      ${stat('Record', r.settled?`${r.won}–${r.lost}`:'—',
+             r.win_pct!=null?r.win_pct+'% win rate':'nothing settled')}
+      ${stat('Fees', money(r.fees), `${r.orders_filled}/${r.orders_sent} orders filled`)}
     </div>
     ${(d.by_sport||[]).length ? `
-    <h3 style="margin:18px 0 6px">By sport</h3>
+    <h3>By sport</h3>
     <div class="scroll"><table><thead><tr>
       <th class="l">Sport</th><th>Orders</th><th>Open</th><th>Exposure</th>
       <th>Settled</th><th>Staked</th><th>Realised</th><th>ROI</th>
     </tr></thead><tbody>${d.by_sport.map(x=>`<tr>
-      <td class="l"><b>${x.sport}</b></td>
+      <td class="l"><span class="tag">${x.sport}</span></td>
       <td>${x.filled}/${x.orders}</td><td>${x.open}</td>
-      <td>${money(x.open_exposure)}</td>
+      <td class="fig">${money(x.open_exposure)}</td>
       <td>${x.settled}${x.settled?` <span class="dim">(${x.won}W)</span>`:''}</td>
-      <td>${money(x.staked)}</td>
-      <td class="${cls(x.realised_pl)}">${signed(x.realised_pl)}</td>
-      <td class="${cls(x.roi_pct)}">${x.roi_pct!=null?x.roi_pct+'%':'—'}</td>
+      <td class="fig">${money(x.staked)}</td>
+      <td class="lead ${cls(x.realised_pl)}">${signed(x.realised_pl)}</td>
+      <td class="fig ${cls(x.roi_pct)}">${x.roi_pct!=null?x.roi_pct+'%':'—'}</td>
     </tr>`).join('')}</tbody></table></div>` : ''}
-    ${r.settled ? `<p class="note">Best ${signed(r.best)} · worst ${signed(r.worst)}
-      · average stake ${money(r.avg_stake)}</p>` : ''}`;
+    ${r.settled ? `<p class="note">Best <b>${signed(r.best)}</b> · worst
+      <b>${signed(r.worst)}</b> · average stake <b>${money(r.avg_stake)}</b></p>` : ''}`;
 
   const ps = d.positions||[];
   $('#kpos').innerHTML = err('positions') + (!ps.length
     ? `<p class="muted">Nothing open.</p>`
     : `<div class="scroll"><table><thead><tr>
-      <th class="l">Sport</th><th class="l">Backing</th><th>Contracts</th>
+      <th class="l">Backing</th><th>Contracts</th>
       <th>Cost</th><th>Bid</th><th>Mark</th><th>Unrealised</th>
       </tr></thead><tbody>${ps.map(x=>`<tr>
-      <td class="l dim">${x.sport}</td>
-      <td class="l">${x.backing}<br><span class="dim">${x.ticker}</span></td>
-      <td>${num(x.contracts,0)}</td><td>${money(x.traded)}</td>
-      <td>${num(x.bid,2)}</td><td>${money(x.mark)}</td>
-      <td class="${cls(x.unrealised)}">${signed(x.unrealised)}</td></tr>`).join('')}
+      <td class="l"><span class="tag">${x.sport}</span>
+        <span class="key"> ${x.backing}</span>
+        <span class="sub">${x.ticker}</span></td>
+      <td class="fig">${num(x.contracts,0)}</td><td class="fig">${money(x.traded)}</td>
+      <td>${num(x.bid,2)}</td><td class="fig">${money(x.mark)}</td>
+      <td class="lead ${cls(x.unrealised)}">${signed(x.unrealised)}</td></tr>`).join('')}
       </tbody></table></div>
       <p class="note">Marked at the resting <b>bid</b> — what you could sell for
         now, not what you paid. On a thin book the bid is often zero, which marks
@@ -700,33 +718,37 @@ async function loadKalshiReport(scope){
   const os = d.orders||[];
   $('#kord').innerHTML = err('orders') + (!os.length
     ? `<p class="muted">No orders sent.</p>`
-    : `<p class="muted">${r.orders_sent} sent · ${r.orders_filled} filled ·
-        ${r.orders_unfilled} never traded</p>
+    : `<p class="muted"><b>${r.orders_sent}</b> sent ·
+        <b>${r.orders_filled}</b> filled · ${r.orders_unfilled} never traded</p>
       <div class="scroll"><table><thead><tr>
-      <th class="l">When</th><th class="l">Sport</th><th class="l">Backing</th>
-      <th>Price</th><th>Placed</th><th>Filled</th><th class="l">Status</th><th>Fees</th>
+      <th class="l">Backing</th><th>Price</th><th>Placed</th><th>Filled</th>
+      <th class="l">Status</th><th>Fees</th><th class="l">When</th>
       </tr></thead><tbody>${os.map(o=>`<tr>
-      <td class="l dim">${localTime(o.created)}</td>
-      <td class="l dim">${o.sport}</td>
-      <td class="l">${o.backing}<br><span class="dim">${o.ticker}</span></td>
-      <td>${num(o.price,2)}</td><td>${num(o.placed,0)}</td>
-      <td class="${o.filled?'up':'dim'}">${num(o.filled,0)}</td>
+      <td class="l"><span class="tag">${o.sport}</span>
+        <span class="key"> ${o.backing}</span>
+        <span class="sub">${o.ticker}</span></td>
+      <td class="fig">${num(o.price,2)}</td><td>${num(o.placed,0)}</td>
+      <td class="fig ${o.filled?'up':'dim'}">${num(o.filled,0)}</td>
       <td class="l ${o.status==='executed'?'up':'dim'}">${o.status||'—'}</td>
-      <td class="dim">${money(o.fees)}</td></tr>`).join('')}
+      <td class="dim">${money(o.fees)}</td>
+      <td class="l dim">${localTime(o.created)}</td></tr>`).join('')}
       </tbody></table></div>`);
 
   const ss = d.settlements||[];
   $('#krec').innerHTML = err('settlements') + (!ss.length
     ? `<p class="muted">Nothing has settled${ps.length
-        ? ` — ${ps.length} position(s) still open`:''}. No P/L to report yet.</p>`
+        ? ` — <b>${ps.length}</b> position(s) still open`:''}. No P/L to report yet.</p>`
     : `<div class="scroll"><table><thead><tr>
-      <th class="l">Settled</th><th class="l">Sport</th><th class="l">Backed</th>
-      <th>Contracts</th><th>Cost</th><th>Returned</th><th>P/L</th>
+      <th class="l">Backed</th><th>Contracts</th><th>Cost</th><th>Returned</th>
+      <th>P/L</th><th class="l">Settled</th>
       </tr></thead><tbody>${ss.map(x=>`<tr>
-      <td class="l dim">${localTime(x.at)}</td><td class="l dim">${x.sport}</td>
-      <td class="l">${x.backing}</td><td>${num(x.contracts,0)}</td>
-      <td>${money(x.cost)}</td><td>${money(x.revenue)}</td>
-      <td class="${cls(x.pl)}">${signed(x.pl)}</td></tr>`).join('')}
+      <td class="l"><span class="tag">${x.sport}</span>
+        <span class="key"> ${x.backing}</span>
+        <span class="sub">${x.ticker}</span></td>
+      <td>${num(x.contracts,0)}</td>
+      <td class="fig">${money(x.cost)}</td><td class="fig">${money(x.revenue)}</td>
+      <td class="lead ${cls(x.pl)}">${signed(x.pl)}</td>
+      <td class="l dim">${localTime(x.at)}</td></tr>`).join('')}
       </tbody></table></div>`);
 }
 

@@ -1149,6 +1149,19 @@ def _kalshi_selftest() -> None:
             except Exception as e:
                 print(f"[kalshi]   {label}: FAILED {type(e).__name__}: "
                       f"{str(e)[:150]}", flush=True)
+        # Dump one raw settlement. The P/L came out at -$31,721, which is a
+        # units error, and guessing which field is in cents rather than dollars
+        # is exactly how the first one was introduced. Read the real shape.
+        try:
+            rows = kalshi.settlements(limit=3)
+            for row in rows[:2]:
+                keep = {k: row.get(k) for k in
+                        ("ticker", "market_result", "revenue", "fee_cost",
+                         "yes_count_fp", "no_count_fp",
+                         "yes_total_cost_dollars", "no_total_cost_dollars")}
+                print(f"[kalshi]   raw settlement: {keep}", flush=True)
+        except Exception as e:
+            print(f"[kalshi]   raw settlement: FAILED {type(e).__name__}", flush=True)
         try:
             mine = risk.placed_here()
             print(f"[kalshi]   ledger: {len(mine['tickers'])} ticker(s), "

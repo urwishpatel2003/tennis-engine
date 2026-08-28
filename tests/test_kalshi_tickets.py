@@ -51,8 +51,11 @@ FIXTURES = {"fixtures": [
      "bet": {"side": "A", "odds": 2.68, "player": "Diane Parry"}},
     {"player_a": "Elise Mertens", "player_b": "Yuliia Starodubtseva", "tour": "wta",
      "tournament": "Cleveland", "model_prob_a": 0.76,
+     "commence_time": "2026-08-28T05:40:00Z",
      "bet": {"side": "A", "odds": 1.41, "player": "Elise Mertens"}},
 ]}
+FIXTURES["fixtures"][0]["commence_time"] = "2026-08-28T00:00:00Z"
+FIXTURES["fixtures"][1]["commence_time"] = "2026-08-28T04:30:00Z"
 MARKETS = {
     ("Alycia Parks", "Ann Li"): HELD,
     ("Diane Parry", "Clara Tauson"): SENT,
@@ -132,6 +135,24 @@ d2 = server.app.test_client().get("/api/kalshi/tickets").get_json()
 check("tickets still render", d2.get("available") is True, str(d2)[:160])
 check("and the ledger still flags what it knows",
       any(t["already_placed"] for t in d2["tickets"]), str(d2["tickets"]))
+
+print("")
+print("7. tickets are ordered by the model's win probability")
+# EV sorting put longshots first: a 12% pick at a long enough price out-EVs a
+# 76% one, which parks the least likely bet in the most prominent row.
+order = [t["backing"] for t in d["tickets"]]
+probs = [t["model_prob"] for t in d["tickets"]]
+check("the most likely pick leads", order[0] == "Elise Mertens", str(order))
+check("probabilities descend", probs == sorted(probs, reverse=True), str(probs))
+check("the longshot is not first", order[0] != "Alycia Parks", str(order))
+
+print("")
+print("8. each ticket says when the match starts")
+starts = {t["backing"]: t["starts"] for t in d["tickets"]}
+check("the odds feed time is used",
+      starts["Elise Mertens"] == "2026-08-28T05:40:00Z", str(starts))
+check("every ticket has one", all(t.get("starts") for t in d["tickets"]), str(starts))
+
 
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")

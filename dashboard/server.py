@@ -557,12 +557,21 @@ def api_kalshi_tickets():
             # Created ONCE here and echoed back on confirm, so a retry after a
             # timeout is recognised by Kalshi rather than doubling the position.
             "offered": offered, "size_capped": capped,
+            # When the match starts. The odds feed is the model's own source, so
+            # it leads; Kalshi's scheduled start is the fallback for a fixture
+            # whose feed row carries no time.
+            "starts": (f.get("commence_time")
+                       or market.get("occurrence_datetime")),
             "held": held.get(str(market.get("ticker"))),
             "already_placed": str(market.get("ticker")) in held,
             "client_order_id": kalshi_order.new_client_order_id(),
         })
 
-    tickets.sort(key=lambda t: -(t["ev"] or 0))
+    # Sorted by the model's own confidence, highest first. EV sorts longshots to
+    # the top - a 12% pick at a big enough price can out-EV a 70% one - which
+    # puts the least likely bets in the most prominent place. Ties break on EV,
+    # so among equally likely picks the better-priced one still leads.
+    tickets.sort(key=lambda t: (-(t["model_prob"] or 0), -(t["ev"] or 0)))
     return jsonify(_clean({
         "available": True, "tickets": tickets, "skipped": skipped,
         "budget": budget, "armed": kalshi_order.armed(),

@@ -502,6 +502,7 @@ def predict_from_states(
     tournament: str | None = None,
     h2h: pd.DataFrame | None = None,
     track_scorelines: bool = True,
+    prob_only: bool = False,
 ) -> dict:
     """
     The whole prediction, given two already-assembled PlayerStates.
@@ -580,6 +581,20 @@ def predict_from_states(
         weights = [W_ELO * (1 - W_MARKET), (1 - W_ELO) * (1 - W_MARKET), W_MARKET]
         sources.append("market")
     p_final = blend_logit(probs, weights)
+
+    # A caller that only needs the headline probability can stop here. Everything
+    # below reconciles the SCORE model to `p_final` and derives markets from it -
+    # about two thirds of the cost of a prediction, and none of it changes
+    # `p_final`, which is already final. Accuracy over a whole season is the
+    # reason this exists: 85 events at a full prediction each is minutes of work
+    # to answer a question that only needs this number.
+    #
+    # It returns the same value the full path returns, because it IS the same
+    # value - not a cheaper approximation of it. tests/test_tournament_accuracy
+    # asserts the two agree.
+    if prob_only:
+        return {"win_prob_a": p_final, "win_prob_b": 1.0 - p_final,
+                "prob_only": True}
 
     # ── C. Reconcile the score model to the headline probability ──────────
     pa_adj, pb_adj = markov.invert_to_target(

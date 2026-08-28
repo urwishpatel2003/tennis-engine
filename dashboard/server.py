@@ -1240,6 +1240,34 @@ def api_tournament():
     return jsonify(_clean(d))
 
 
+@app.route("/api/tournament/accuracy")
+def api_tournament_accuracy():
+    """
+    Model accuracy for a handful of events, for the tournament listing.
+
+    Batched and capped rather than computed for a whole season at once. Even on
+    the probability-only path an event costs a second or three, and a season is
+    85 of them - one request for all of them would sit there for minutes and
+    then time out. The page asks for a few at a time and fills the column in as
+    the answers arrive.
+    """
+    if not data_ready():
+        return _no_data()
+    tour = request.args.get("tour", "atp")
+    ids = [i for i in (request.args.get("ids") or "").split(",") if i][:8]
+    if not ids:
+        return jsonify({"accuracy": {}})
+    st = tstore()
+    out = {}
+    for tid in ids:
+        try:
+            out[tid] = st.accuracy(tour, tid)
+        except Exception as e:
+            # One unbuildable event must not blank the whole column.
+            out[tid] = {"error": f"{type(e).__name__}"}
+    return jsonify(_clean({"accuracy": out}))
+
+
 @app.route("/api/tournament/bracket")
 def api_tournament_bracket():
     """

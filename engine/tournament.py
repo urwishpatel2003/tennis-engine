@@ -92,6 +92,9 @@ class TournamentStore:
         self.sr = self._read(PROCESSED / "serve_return.parquet")
         self.h2h = self._read(PROCESSED / "h2h.parquet")
         self._draw_cache: dict = {}
+        # A finished event's accuracy never changes, and the listing asks
+        # for it once per row.
+        self._acc_cache: dict = {}
         self._bracket_cache: dict = {}
 
         # match_id -> frozen pre-match state for both players.
@@ -209,7 +212,8 @@ class TournamentStore:
         st.ioc = attr.get("ioc")
         return st
 
-    def predict_match(self, row, scorelines: bool = False) -> dict | None:
+    def predict_match(self, row, scorelines: bool = False,
+                      prob_only: bool = False) -> dict | None:
         """
         Prediction for one historical match, from its frozen pre-match state.
 
@@ -226,8 +230,51 @@ class TournamentStore:
             a, b, tour=row.tour, surface=row.surface,
             best_of=int(row.best_of) if pd.notna(row.best_of) else 3,
             as_of=row.tourney_date, tournament=row.tourney_name, h2h=self.h2h,
-            track_scorelines=scorelines,
+            track_scorelines=scorelines, prob_only=prob_only,
         )
+
+    @staticmethod
+    def _score(probs) -> dict:
+        """
+        Hits and accuracy from (prob_the_winner_won, completed) pairs.
+
+        `predict_match` puts the ACTUAL winner in slot A, so a probability at or
+        above 0.5 means the model favoured the player who went on to win.
+
+        One definition, used by both the draw summary and the listing. They were
+        going to be written twice - once per screen - and two definitions of
+        "accuracy" that drift apart is worse than not showing it at all.
+        """
+        hits = scored = 0
+        for pw, completed in probs:
+            if pw is None or not completed:
+                continue
+            scored += 1
+            hits += int(pw >= 0.5)
+        return {"hits": hits, "scored": scored,
+                "accuracy": (hits / scored) if scored else None}
+
+    def accuracy(self, tour: str, tourney_id: str) -> dict:
+        """
+        How often the model favoured the eventual winner, for one event.
+
+        Uses the probability-only path: the headline number is settled before the
+        score model is reconciled to it, so the reconciliation - two thirds of a
+        full prediction - is pure waste when all that is wanted is who was
+        favoured. A finished event never changes, so the answer is cached.
+        """
+        key = (tour, tourney_id)
+        if key in self._acc_cache:
+            return self._acc_cache[key]
+        m = self.matches
+        m = m[(m["tour"] == tour) & (m["tourney_id"] == tourney_id)]
+        pairs = []
+        for r in m.itertuples(index=False):
+            p = self.predict_match(r, prob_only=True)
+            pairs.append((None if p is None else p["win_prob_a"], bool(r.completed)))
+        out = self._score(pairs)
+        self._acc_cache[key] = out
+        return out
 
     # ── the draw ──────────────────────────────────────────────────────────────
     def draw(self, tour: str, tourney_id: str) -> dict:
@@ -325,11 +372,14 @@ class TournamentStore:
 
         order = [x for x in ROUND_ORDER if x in rounds]
         played = hits + misses
+        scored = self._score(
+            [(preds[r.match_id]["win_prob_a"] if preds.get(r.match_id) else None,
+              bool(r.completed)) for r in m.itertuples(index=False)])
         summary = {
             "matches": int(len(m)),
-            "scored": played,
-            "hits": hits,
-            "accuracy": (hits / played) if played else None,
+            "scored": scored["scored"],
+            "hits": scored["hits"],
+            "accuracy": scored["accuracy"],
             "logloss": float(np.mean(losses)) if losses else None,
             "upsets_missed": sorted(upsets_missed, key=lambda x: x["model_prob"])[:5],
             "upsets_called": sorted(upsets_called, key=lambda x: -x["model_prob"])[:5],

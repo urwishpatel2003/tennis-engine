@@ -98,7 +98,7 @@
   .key{font-weight:650}                       /* what the row is about */
   .sub{display:block;font-size:11px;color:var(--dim);font-weight:400;
        font-variant-numeric:tabular-nums}     /* the identifier under it */
-  td.fig{font-weight:650}                     /* a number that decides something */
+  .fig,td.fig{font-weight:650}                /* a number that decides something */
   td.lead{font-weight:700;font-size:15px}     /* the P/L column */
   .tag{display:inline-block;padding:1px 7px;border-radius:5px;font-size:10px;
        font-weight:700;letter-spacing:.4px;background:var(--panel2);
@@ -967,8 +967,10 @@ async function viewTournaments(arg){
         <input id="q" placeholder="name contains…" value="${st.q||''}"></div>
     </div>
     <p class="muted">Every prediction below was computed from the ratings as they
-      stood <em>before</em> that match was played, so the hit/miss column is a real
-      out-of-sample record, not hindsight.</p>
+      stood <em>before</em> that match was played, so the accuracy column is a real
+      out-of-sample record, not hindsight. It counts how often the model favoured
+      the player who won; a coin flip is 50%. Figures fill in as each draw is
+      priced.</p>
     <div id="list" class="scroll"><p class="muted">Loading…</p></div>
    </div>
    <div id="draw"></div>`;
@@ -997,18 +999,50 @@ async function viewTournaments(arg){
                    PM:'Prem. Mand.', I:'Intl', D:'Team', C:'Challenger', O:'Olympics'};
     $('#list').innerHTML = `<table><thead><tr>
         <th class="l">Date</th><th class="l">Tournament</th><th class="l">Surface</th>
-        <th class="l">Level</th><th>Draw</th><th>Matches</th></tr></thead><tbody>
+        <th class="l">Level</th><th>Draw</th><th>Matches</th>
+        <th>Model accuracy</th></tr></thead><tbody>
       ${rows.map(r=>`<tr class="click" data-id="${r.tourney_id}">
         <td class="l">${r.date||''}</td>
         <td class="l"><strong>${r.name}</strong></td>
         <td class="l">${surf(r.surface)}</td>
         <td class="l">${LEVEL[r.level]||r.level||''}</td>
-        <td>${r.draw_size||''}</td><td>${r.matches}</td></tr>`).join('')}
+        <td>${r.draw_size||''}</td><td>${r.matches}</td>
+        <td class="acc" data-acc="${r.tourney_id}"><span class="dim">…</span></td>
+        </tr>`).join('')}
       </tbody></table>`;
     $('#list').querySelector('table').onclick = e => {
       const tr = e.target.closest('tr[data-id]');
       if(tr) loadDraw(tour, tr.dataset.id);
     };
+    fillAccuracy(tour, rows.map(r=>r.tourney_id));
+  }
+
+  /* Accuracy is priced per match from pre-match ratings, so a season is minutes
+     of work. Ask for a few events at a time and fill the column in as answers
+     arrive, rather than making the whole table wait for the slowest draw.
+     `token` cancels an in-flight fill when the tour or season changes, so a
+     stale batch cannot write into the new table. */
+  let accToken = 0;
+  async function fillAccuracy(tour, ids){
+    const mine = ++accToken;
+    for(let i = 0; i < ids.length; i += 6){
+      if(mine !== accToken) return;
+      const batch = ids.slice(i, i+6);
+      let d;
+      try { d = await api('/api/tournament/accuracy',
+                          {tour, ids: batch.join(',')}); }
+      catch(e){ return; }
+      if(mine !== accToken) return;
+      for(const [tid, a] of Object.entries(d.accuracy||{})){
+        const cell = document.querySelector(`[data-acc="${tid}"]`);
+        if(!cell) continue;
+        cell.innerHTML = (!a || a.error || a.accuracy == null)
+          ? '<span class="dim">—</span>'
+          : `<span class="fig ${a.accuracy>=0.65?'up':(a.accuracy<0.5?'down':'')}"
+              >${pct(a.accuracy)}</span>
+             <span class="sub">${a.hits}/${a.scored}</span>`;
+      }
+    }
   }
 
   async function loadDraw(tour, tid){

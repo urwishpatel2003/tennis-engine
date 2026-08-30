@@ -52,12 +52,12 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def committed_today() -> float:
-    """Dollars a person has confirmed today. Unreadable lines are skipped."""
+def _today_rows() -> list[dict]:
+    """Today's confirmed commitments. Unreadable lines are skipped."""
     p = _ledger_path()
     if not p.exists():
-        return 0.0
-    day, total = _today(), 0.0
+        return []
+    day, out = _today(), []
     for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -67,8 +67,36 @@ def committed_today() -> float:
         except json.JSONDecodeError:
             continue          # a torn write must not hide the day's exposure
         if str(r.get("day")) == day:
-            total += float(r.get("stake") or 0.0)
-    return round(total, 2)
+            out.append(r)
+    return out
+
+
+def staked_today() -> float:
+    """Everything confirmed today, settled or not. The gross figure."""
+    return round(sum(float(r.get("stake") or 0.0) for r in _today_rows()), 2)
+
+
+def committed_today(open_tickers: set | None = None) -> float:
+    """
+    Dollars STILL AT RISK today.
+
+    Pass the tickers with an open position and a stake whose market has since
+    settled is released back into the day's allowance: the money has come back,
+    win or lose, so it is no longer exposure. Without the argument this is the
+    gross figure and nothing is released, which is the safe default for any
+    caller that cannot see the account.
+
+    The trade-off is deliberate and worth naming. The daily cap exists to stop a
+    run of individually reasonable tickets adding up to a bad day. Releasing
+    settled stakes weakens that: on a fast-settling day the same allowance can
+    be spent more than once. It bounds money AT RISK AT ONCE rather than money
+    staked over the day, and `staked_today` keeps the gross figure visible so
+    the difference is never hidden.
+    """
+    rows = _today_rows()
+    if open_tickers is not None:
+        rows = [r for r in rows if str(r.get("ticker")) in open_tickers]
+    return round(sum(float(r.get("stake") or 0.0) for r in rows), 2)
 
 
 def record_commit(stake: float, ticker: str, contracts: int,
@@ -92,7 +120,7 @@ def record_commit(stake: float, ticker: str, contracts: int,
         fh.write(json.dumps(row) + "\n")
 
 
-def budget(bankroll: float) -> dict:
+def budget(bankroll: float, open_tickers: set | None = None) -> dict:
     """
     What is left to risk today, and the cap a single ticket may use.
 
@@ -102,12 +130,14 @@ def budget(bankroll: float) -> dict:
     if bankroll <= 0:
         return {"bankroll": 0.0, "committed": 0.0, "daily_remaining": 0.0,
                 "ticket_pct": 0.0, "exhausted": True}
-    committed = committed_today()
+    committed = committed_today(open_tickers)
     daily_cap = bankroll * MAX_DAILY_PCT / 100.0
     remaining = max(0.0, daily_cap - committed)
     ticket_pct = min(MAX_TICKET_PCT, 100.0 * remaining / bankroll)
     return {"bankroll": round(bankroll, 2),
             "committed": round(committed, 2),
+            "staked_today": staked_today(),
+            "released": round(max(0.0, staked_today() - committed), 2),
             "daily_cap": round(daily_cap, 2),
             "daily_remaining": round(remaining, 2),
             "ticket_pct": round(max(ticket_pct, 0.0), 4),

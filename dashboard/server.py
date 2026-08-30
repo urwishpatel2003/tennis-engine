@@ -167,6 +167,24 @@ def _clean(obj):
     return obj
 
 
+@app.after_request
+def _never_cache_money(resp):
+    """
+    Nothing under /api/kalshi may be cached, by anything.
+
+    These endpoints price real orders against a live balance. A browser serving
+    a cached ticket list sizes a bet against a bankroll that no longer exists,
+    which is how tickets kept coming back at their old contract counts after a
+    fill had already moved the balance. The index is already no-store for the
+    same reason; the money endpoints needed it more.
+    """
+    if request.path.startswith("/api/kalshi"):
+        resp.headers["Cache-Control"] = "no-store, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
@@ -466,7 +484,7 @@ def api_kalshi_tickets():
                         "reason": f"could not read balance: {str(e)[:120]}",
                         "tickets": []})
 
-    budget = risk.budget(bankroll)
+    budget = risk.budget(bankroll, kalshi_order.open_tickers())
     try:
         fixtures = live.fixtures(engine(), tours=("atp", "wta")).get("fixtures", [])
     except Exception as e:
@@ -615,7 +633,7 @@ def api_kalshi_report():
     bal = pull("balance", kalshi.balance, {})
     bankroll = float(bal.get("dollars") or 0.0)
     out["balance"] = bal.get("dollars")
-    out["budget"] = risk.budget(bankroll)
+    out["budget"] = risk.budget(bankroll, kalshi_order.open_tickers())
     out["caps"] = {"ticket_pct": risk.MAX_TICKET_PCT, "daily_pct": risk.MAX_DAILY_PCT,
                    "maker": risk.MAKER,
                    "kelly_fraction": kalshi.KELLY_FRACTION,

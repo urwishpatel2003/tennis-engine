@@ -509,7 +509,7 @@ function wireKalToggle(){
 async function loadKalshi(){
   if(!$('#kal')) return;
   let d;
-  try { d = await api('/api/kalshi/tickets'); }
+  try { d = await api('/api/kalshi/tickets', {_: Date.now()}); }
   catch(e){ $('#kal').innerHTML = `<div class="err">${e}</div>`; return; }
   if(d.available === false){
     $('#kal').innerHTML = `<p class="muted">Tickets unavailable — ${d.reason||'unknown'}</p>`;
@@ -523,8 +523,9 @@ async function loadKalshi(){
     ? `<span class="down">armed: a confirmed ticket WILL be sent</span>`
     : `<span class="dim">dry run: confirming logs the order and sends nothing</span>`;
   const head = `<p class="muted">${mode} · ${arm}<br>
-     bankroll $${num(b.bankroll,2)} · committed today $${num(b.committed,2)} of
-     $${num(b.daily_cap,2)} · remaining $${num(b.daily_remaining,2)}</p>`;
+     bankroll $${num(b.bankroll,2)} · at risk today $${num(b.committed,2)} of
+     $${num(b.daily_cap,2)} · remaining $${num(b.daily_remaining,2)}${
+       b.released ? ` · $${num(b.released,2)} released by settled bets`:''}</p>`;
 
   /* Today only, by default. "Today" is the VIEWER's day, not the server's: the
      server runs in UTC, so a 00:30Z match is tomorrow to it and this evening to
@@ -713,7 +714,8 @@ const stat = (label, value, sub, klass, hero) => `
 
 async function loadKalshiReport(scope){
   let d;
-  try { d = await api('/api/kalshi/report', scope?{scope}:{}); }
+  try { d = await api('/api/kalshi/report',
+                      scope ? {scope, _: Date.now()} : {_: Date.now()}); }
   catch(e){ $('#kacct').innerHTML = `<div class="err">${e}</div>`; return; }
   if(d.available === false){
     ['#kacct','#kperf','#kord','#kpos','#krec'].forEach(x=>{ if($(x))
@@ -728,8 +730,9 @@ async function loadKalshiReport(scope){
       ${stat('Balance', money(d.balance), d.live?'live account':'demo', '', true)}
       ${stat('Per ticket', money(b.bankroll*c.ticket_pct/100),
              c.ticket_pct+'% of bankroll')}
-      ${stat('Used today', money(b.committed),
-             money(b.daily_remaining)+' left of '+money(b.daily_cap))}
+      ${stat('At risk today', money(b.committed),
+             money(b.daily_remaining)+' left of '+money(b.daily_cap)
+             + (b.released ? ` · ${money(b.released)} released`:''))}
       ${stat('Mode', d.armed?'ARMED':'Safe',
              d.armed?'confirmed tickets are sent':'tickets are logged only',
              d.armed?'down':'dim')}

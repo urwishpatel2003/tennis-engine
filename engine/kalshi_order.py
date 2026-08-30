@@ -80,6 +80,23 @@ SELF_TRADE_PREVENTION = "taker_at_cross"
 MAX_PRICE_DRIFT = float(os.environ.get("KALSHI_MAX_PRICE_DRIFT", "0.02"))
 
 
+def open_tickers() -> set | None:
+    """
+    Tickers with a live position. None means "could not tell".
+
+    A stake whose market has settled is no longer at risk, so it should not keep
+    consuming the day's allowance. But a FAILURE to read positions must not read
+    as "nothing is open" - that would release every stake and hand back the full
+    daily budget on an API error. None keeps the gross figure, which is the safe
+    direction to be wrong in.
+    """
+    try:
+        return {str(p.get("ticker")) for p in kalshi.positions(limit=200)
+                if (kalshi.num(p.get("position_fp")) or 0) != 0}
+    except Exception:
+        return None
+
+
 def armed() -> bool:
     """False means build the payload and send nothing."""
     return os.environ.get("KALSHI_ARM") == "1"
@@ -246,7 +263,7 @@ def create_order(ticker: str, count: int, price: float, client_order_id: str,
         out["error"] = f"could not read balance: {type(e).__name__}: {str(e)[:100]}"
         return out
 
-    b = risk.budget(bankroll)
+    b = risk.budget(bankroll, open_tickers())
     if b["exhausted"]:
         out["error"] = (f"daily exposure already used: ${b['committed']:.2f} of "
                         f"${b['daily_cap']:.2f}")

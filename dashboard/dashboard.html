@@ -150,6 +150,7 @@ const ROUTES = {live:viewLive, today:viewToday, rankings:viewRankings,
                 tournaments:viewTournaments, matchup:viewMatchup,
                 player:viewPlayer, model:viewModel, kalshi:viewKalshi};
 function route(){
+  clearInterval(KAL_TIMER);      // stop polling Kalshi when leaving that page
   const [,name,arg] = (location.hash||'#/today').split('/');
   const r = ROUTES[name] ? name : 'today';
   document.querySelectorAll('nav a').forEach(a=>
@@ -477,6 +478,34 @@ if(!$('#rec')) return;   // only the Today view has this panel
 /* Kalshi tickets. Building a ticket costs nothing; placing an order is a
    separate, explicitly confirmed act. Nothing here fires on load, on a timer,
    or in a loop - each order needs its own click and its own confirmation. */
+/* Today's fixtures only, unless asked otherwise. A hidden pick is the kind of
+   thing that reads as a bug, so the count of what is hidden is always shown and
+   the switch back is one click. */
+let KAL_TODAY_ONLY = true;
+let KAL_TIMER = null;
+
+/* Reload the tickets and the account together, and SAY so while it happens.
+   These are two round trips to Kalshi and can take a few seconds. */
+async function refreshKalshi(why){
+  const note = $('#kalstatus');
+  if(note) note.textContent = `Updating ${why ? why : ''}…`;
+  try {
+    await Promise.all([loadKalshi(), loadKalshiReport($('#kscope')?.value)]);
+    const n = $('#kalstatus');
+    if(n) n.textContent = `Updated ${new Date().toLocaleTimeString(undefined,
+      {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false})}`;
+  } catch(e){
+    const n = $('#kalstatus');
+    if(n) n.textContent = `Update failed: ${e}`;
+  }
+}
+
+function wireKalToggle(){
+  const a = $('#kaltoggle');
+  if(a) a.onclick = e => { e.preventDefault();
+    KAL_TODAY_ONLY = !KAL_TODAY_ONLY; loadKalshi(); };
+}
+
 async function loadKalshi(){
   if(!$('#kal')) return;
   let d;
@@ -497,15 +526,34 @@ async function loadKalshi(){
      bankroll $${num(b.bankroll,2)} · committed today $${num(b.committed,2)} of
      $${num(b.daily_cap,2)} · remaining $${num(b.daily_remaining,2)}</p>`;
 
-  const rows = d.tickets || [];
+  /* Today only, by default. "Today" is the VIEWER's day, not the server's: the
+     server runs in UTC, so a 00:30Z match is tomorrow to it and this evening to
+     you. Filtering here is the only place the right timezone is known.
+
+     A fixture with no start time is kept rather than dropped — an unknown time
+     is not evidence that it is not today, and silently hiding a bet is worse
+     than showing one too many. */
+  const all = d.tickets || [];
+  const today = localDay(new Date().toISOString());
+  const rows = KAL_TODAY_ONLY
+    ? all.filter(t => !t.starts || localDay(t.starts) === today)
+    : all;
+  const laterCount = all.length - rows.length;
+  const toggle = `<p class="muted">${KAL_TODAY_ONLY
+      ? `Showing <b>today only</b> (${TZLABEL})${laterCount
+          ? ` — ${laterCount} later fixture(s) hidden` : ''}.`
+      : `Showing <b>all upcoming</b> fixtures.`}
+    <a href="#" id="kaltoggle">${KAL_TODAY_ONLY?'show all':'today only'}</a></p>`;
+
   if(!rows.length){
     const why = (d.skipped||[]).slice(0,6).map(x =>
       `<li class="muted">${x.match} — ${x.reason}</li>`).join('');
-    $('#kal').innerHTML = head + `<p class="muted">No tickets right now.</p>` +
-      (why ? `<ul>${why}</ul>` : '');
+    $('#kal').innerHTML = head + toggle
+      + `<p class="muted">No tickets for today.</p>` + (why ? `<ul>${why}</ul>` : '');
+    wireKalToggle();
     return;
   }
-  $('#kal').innerHTML = head + `<div class="scroll"><table><thead><tr>
+  $('#kal').innerHTML = head + toggle + `<div class="scroll"><table><thead><tr>
       <th class="l">Backing</th><th class="l">Starts</th><th>Model</th><th>Price</th>
       <th>Contracts</th><th>Stake</th><th>Fee</th><th>EV</th><th></th>
     </tr></thead><tbody>
@@ -531,6 +579,7 @@ async function loadKalshi(){
       first, and every limit is re-checked on the server — the browser is the
       wrong place to enforce a spending cap.</p>`;
 
+  wireKalToggle();
   $('#kal').querySelectorAll('button[data-k]').forEach(btn => {
     btn.onclick = async () => {
       const t = rows[+btn.dataset.k];
@@ -566,12 +615,17 @@ ${t.backing} to win — ${t.match}
             backing:t.backing, tour:t.tour})}).then(x=>x.json());
         btn.textContent = r.ok ? (r.dry_run ? 'Dry run logged' : 'Placed') : 'Refused';
         if(!r.ok) alert('Not placed: ' + (r.error || 'unknown'));
-        /* A filled order lowers the bankroll, which lowers the per-ticket cap.
-           Every other ticket on screen was sized against the OLD balance and is
-           now stale - left alone they get refused for being a dollar over a cap
-           that moved beneath them. Re-scan so the remaining tickets are sized
-           against what the account actually holds now. */
-        if(r.ok && !r.dry_run){ loadKalshi(); loadKalshiReport($('#kscope')?.value); }
+        /* Refresh after EVERY attempt, not just a fill. A filled order lowers
+           the bankroll, which lowers the per-ticket cap, and every other ticket
+           on screen was sized against the old balance - left alone they get
+           refused for being a dollar over a cap that moved beneath them. A
+           REFUSED order matters too: the usual reason it was refused is that
+           the account already moved.
+
+           Awaited and announced, because the previous version fired these and
+           returned immediately, so a slow rescan looked like nothing happening
+           and the balance appeared stuck. */
+        if(!r.dry_run) await refreshKalshi('after placing');
       } catch(e){ btn.textContent = 'Failed'; alert(e); }
     };
   });
@@ -595,28 +649,40 @@ async function viewKalshi(){
     <div class="card">
       <div class="row" style="justify-content:space-between;align-items:flex-end">
         <h2 style="margin:0">Kalshi</h2>
-        <div><label>Showing</label><select id="kscope">
-          <option value="page">This model only</option>
-          <option value="tennis">All tennis (incl. your own)</option>
-          <option value="account">Everything on Kalshi</option>
-        </select></div>
+        <div class="row" style="margin:0;align-items:flex-end">
+          <div><label>Showing</label><select id="kscope">
+            <option value="page">This model only</option>
+            <option value="tennis">All tennis (incl. your own)</option>
+            <option value="account">Everything on Kalshi</option>
+          </select></div>
+          <button id="krefresh">Refresh</button>
+        </div>
       </div>
+      <p class="muted" id="kalstatus">loading…</p>
       <div id="kacct" class="muted">loading…</div>
       <p class="note" id="kscopenote"></p>
     </div>
     <div class="card"><h2>Tickets to place</h2>
-      <p class="note">The model's current picks, sized to your balance, sorted
-        by win probability — most likely first. Times are your local
-        ${TZLABEL}. A ticket is not an order — placing one asks for
-        confirmation first.</p>
+      <p class="note">Today's picks, sized to your balance, sorted by win
+        probability — most likely first. Times are your local ${TZLABEL}.
+        A ticket is not an order — placing one asks for confirmation first.</p>
       <div id="kal" class="muted">loading…</div></div>
     <div class="card"><h2>Performance</h2><div id="kperf" class="muted">loading…</div></div>
     <div class="card"><h2>Open positions</h2><div id="kpos" class="muted">loading…</div></div>
     <div class="card"><h2>Orders sent</h2><div id="kord" class="muted">loading…</div></div>
     <div class="card"><h2>Settled</h2><div id="krec" class="muted">loading…</div></div>`;
-  loadKalshi();
-  loadKalshiReport();
+  refreshKalshi();
   $('#kscope').onchange = () => loadKalshiReport($('#kscope').value);
+  $('#krefresh').onclick = () => refreshKalshi('on request');
+  /* Keep the balance and positions current without being asked. Sixty seconds
+     is slow enough to be a rounding error against the rate limit and fast
+     enough that the account never looks stale. Cleared on navigation so it
+     does not keep polling from a page nobody is looking at. */
+  clearInterval(KAL_TIMER);
+  KAL_TIMER = setInterval(() => {
+    if($('#kacct')) loadKalshiReport($('#kscope')?.value);
+    else clearInterval(KAL_TIMER);
+  }, 60000);
 }
 
 /* How long until it starts. A timestamp alone makes you do the arithmetic, and

@@ -855,7 +855,7 @@ def api_kalshi_report():
             + (n(s_.get("no_count_fp")) or 0.0)
         r["settle_cost"] += (n(s_.get("yes_total_cost_dollars")) or 0.0) \
             + (n(s_.get("no_total_cost_dollars")) or 0.0)
-        r["fees"] += n(s_.get("fee_cost")) or 0.0
+        r["settle_fee"] = (r.get("settle_fee") or 0.0) + (n(s_.get("fee_cost")) or 0.0)
         r["kind"].add("settled")
         at = s_.get("settled_time")
         if at and (r["at"] is None or str(at) > str(r["at"])):
@@ -867,7 +867,7 @@ def api_kalshi_report():
         # realises the gain on 40 and leaves 60 open at the same average.
         if r["bought"] > 0:
             avg = r["cost"] / r["bought"]
-        elif r["settled"] > 0 and r["settle_cost"] > 0:
+        elif r["settled"] > 0 and r["settle_cost"] > 0 and r["sold"] <= 0:
             # The fills window does not reach back forever. For an older market
             # the settlement's own cost is the only basis available.
             avg = r["settle_cost"] / r["settled"]
@@ -875,22 +875,38 @@ def api_kalshi_report():
             r["cost"] = r["settle_cost"]
         else:
             avg = 0.0
-        closed_n = r["sold"] + r["settled"]
+        # You can only SETTLE what you still held. A position that was cashed
+        # out and whose market then settled anyway carries both a sell fill and
+        # a settlement row; adding the settlement's contracts on top of the ones
+        # already sold books more closed than were ever bought, charges cost
+        # basis on all of them, and turns a winner into a loss.
+        remaining = max(0.0, r["bought"] - r["sold"])
+        settled_n = min(r["settled"], remaining)
+        # Revenue belongs only to the part that actually settled.
+        revenue = (r["revenue"] * (settled_n / r["settled"])
+                   if r["settled"] > 0 else 0.0)
+        closed_n = r["sold"] + settled_n
         open_n = max(0.0, r["bought"] - closed_n)
         if open_n > 0:
             open_cost_by_ticker[t] = round(avg * open_n, 2)
         if closed_n <= 0:
             continue
         basis = avg * closed_n
-        returned = r["proceeds"] + r["revenue"]
+        returned = r["proceeds"] + revenue
+        # Fills are the authoritative per-trade fee record. The settlement's
+        # fee_cost repeats the market's cumulative fee rather than adding a new
+        # one, so it is used ONLY when no fills reach back far enough to say.
+        fees = r["fees"] if r["fees"] > 0 else (r.get("settle_fee") or 0.0)
         closed.append({
             "ticker": t, "backing": name_of(t), "sport": sport_of(t),
-            "kind": " + ".join(sorted(r["kind"])) or "closed",
+            "kind": (" + ".join(sorted(k for k in r["kind"]
+                                       if k != "settled" or settled_n > 0))
+                     or "cashed out"),
             "contracts": round(closed_n, 2),
             "cost": round(basis, 2),
             "revenue": round(returned, 2),
-            "fee": round(r["fees"], 2),
-            "pl": round(returned - basis - r["fees"], 2),
+            "fee": round(fees, 2),
+            "pl": round(returned - basis - fees, 2),
             "at": r["at"],
         })
     closed.sort(key=lambda x: str(x.get("at") or ""), reverse=True)

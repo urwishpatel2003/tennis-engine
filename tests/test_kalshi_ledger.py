@@ -59,12 +59,14 @@ kalshi.market = lambda t: {"yes_sub_title": NAMES.get(t, t),
                            "yes_bid_dollars": "0.5000"}
 kalshi.orders = lambda limit=200, status=None: []
 kalshi.fills = lambda limit=200: [
+    # EXACT rows from the live account. The sell fee is 0.6801 and the buy fee
+    # 2.1289; they sum to 2.8090, which is also what the settlement reports.
     {"ticker": CASH, "book_side": "ask", "outcome_side": "no", "count_fp": "132.00",
-     "yes_price_dollars": "0.9200", "fee_cost": "0.680100",
-     "created_time": "2026-08-31T21:15:21Z"},
+     "yes_price_dollars": "0.9200", "no_price_dollars": "0.0800",
+     "fee_cost": "0.680100", "created_time": "2026-08-31T21:15:21Z"},
     {"ticker": CASH, "book_side": "bid", "outcome_side": "yes", "count_fp": "132.00",
-     "yes_price_dollars": "0.3600", "fee_cost": "0.560000",
-     "created_time": "2026-08-31T16:10:37Z"},
+     "yes_price_dollars": "0.3600", "no_price_dollars": "0.6400",
+     "fee_cost": "2.128900", "created_time": "2026-08-31T16:10:37Z"},
     {"ticker": SETL, "book_side": "bid", "outcome_side": "yes", "count_fp": "77.00",
      "yes_price_dollars": "0.5200", "fee_cost": "1.345400",
      "created_time": "2026-08-31T15:00:00Z"},
@@ -80,6 +82,17 @@ kalshi.settlements = lambda limit=200: [
      "yes_total_cost_dollars": "40.0400", "no_count_fp": "0.00",
      "no_total_cost_dollars": "0.0000", "revenue": 7700, "fee_cost": "0.0000",
      "settled_time": "2026-08-31T19:00:00Z"},
+    # The trap: a market that was CASHED OUT and then settled anyway. Kalshi
+    # reports a settlement row for it even though the position was already
+    # flat. Counting those contracts as closed on top of the ones already sold
+    # books more closed than were ever bought, and turns a winner into a loss.
+    # The real settlement: it reports BOTH sides (yes_n and no_n are each 132,
+    # because Kalshi models the sell as buying 132 NO), zero revenue, and a fee
+    # of 2.8090 that repeats the fills rather than adding to them.
+    {"ticker": CASH, "market_result": "yes", "yes_count_fp": "132.00",
+     "yes_total_cost_dollars": "47.520000", "no_count_fp": "132.00",
+     "no_total_cost_dollars": "10.560000", "revenue": 0, "fee_cost": "2.809000",
+     "settled_time": "2026-08-31T23:00:00Z"},
 ]
 kalshi.positions = lambda limit=200: [
     {"ticker": CASH, "position_fp": "0.00", "market_exposure_dollars": "0.0000",
@@ -106,7 +119,7 @@ check("it is labelled as a cash-out", "cashed out" in pod.get("kind", ""), str(p
 check("cost is the BUY price", pod.get("cost") == 47.52, str(pod.get("cost")))
 check("returned is the SELL proceeds", pod.get("revenue") == 121.44, str(pod))
 # Kalshi's own realized_pnl_dollars for this market is 73.92, before fees.
-check("P/L is gross minus fees", abs(pod.get("pl", 0) - (73.92 - 1.2401)) < 0.02,
+check("P/L is gross minus fees", abs(pod.get("pl", 0) - (73.92 - 2.809)) < 0.02,
       str(pod.get("pl")))
 check("the record counts it", rec["cashed_out"] >= 1, str(rec))
 
@@ -147,6 +160,32 @@ check("the open ticker has no settled row for its full size",
       by.get("Darderi", {}).get("contracts") != 52, str(part))
 check("nothing unsold is in the realised figure",
       rec["realised_pl"] < 47.52 + 77.0, str(rec))
+
+print("")
+print("7. the real Podoroska trade, from the live rows")
+# The deployed code produced -$26.74 on this exact data:
+#   closed = 132 sold + 264 settled = 396 -> basis 0.36*396 = 142.56
+#   fees   = 2.809 fills + 2.809 settlement = 5.618  (counted twice)
+#   121.44 - 142.56 - 5.618 = -26.74
+# The truth: bought 132 at 0.36, sold at 0.92, gross 73.92, fees 2.809.
+GROSS, FEES = 73.92, 2.809
+check("contracts closed never exceed contracts bought",
+      pod.get("contracts") == 132, str(pod.get("contracts")))
+check("cost basis is the buy, charged once",
+      pod.get("cost") == 47.52, str(pod.get("cost")))
+check("returned is the sell proceeds",
+      pod.get("revenue") == 121.44, str(pod.get("revenue")))
+check("the settlement fee is not added on top of the fill fees",
+      abs(pod.get("fee", 0) - FEES) < 0.01, str(pod.get("fee")))
+check("gross matches Kalshi's own realized_pnl_dollars",
+      abs((pod.get("revenue", 0) - pod.get("cost", 0)) - GROSS) < 0.01,
+      str(pod.get("revenue", 0) - pod.get("cost", 0)))
+check("net P/L is +$71.11",
+      abs(pod.get("pl", 0) - (GROSS - FEES)) < 0.02, str(pod.get("pl")))
+check("it is NOT the -$26.74 that shipped", pod.get("pl", 0) > 0,
+      str(pod.get("pl")))
+check("it reads as a cash-out", "cashed out" in pod.get("kind", ""),
+      str(pod.get("kind")))
 
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")

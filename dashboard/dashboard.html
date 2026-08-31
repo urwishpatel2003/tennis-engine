@@ -728,7 +728,7 @@ async function viewKalshi(){
     <div class="card"><h2>Performance</h2><div id="kperf" class="muted">loading…</div></div>
     <div class="card"><h2>Open positions</h2><div id="kpos" class="muted">loading…</div></div>
     <div class="card"><h2>Orders sent</h2><div id="kord" class="muted">loading…</div></div>
-    <div class="card"><h2>Settled</h2><div id="krec" class="muted">loading…</div></div>`;
+    <div class="card"><h2>Closed trades</h2><div id="krec" class="muted">loading…</div></div>`;
   refreshKalshi();
   $('#kscope').onchange = () => loadKalshiReport($('#kscope').value);
   $('#krefresh').onclick = () => refreshKalshi('on request');
@@ -818,14 +818,15 @@ async function loadKalshiReport(scope){
       ${stat('Total return', signed(r.total_return), 'realised + open mark',
              cls(r.total_return), true)}
       ${stat('Realised', signed(r.realised_pl),
-             r.settled?`${r.settled} settled${r.roi_pct!=null?' · '+r.roi_pct+'% ROI':''}`
-                      :'nothing settled yet', cls(r.realised_pl), true)}
+             r.settled?`${r.settled} closed${r.cashed_out?', '+r.cashed_out+' cashed out':''}${
+               r.roi_pct!=null?' · '+r.roi_pct+'% ROI':''}`
+                      :'nothing closed yet', cls(r.realised_pl), true)}
       ${stat('Open exposure', money(r.open_exposure),
              `${r.open_positions} position(s) · mark ${money(r.open_mark)}`)}
       ${stat('Unrealised', signed(r.open_unrealised), 'mark vs cost',
              cls(r.open_unrealised))}
       ${stat('Record', r.settled?`${r.won}–${r.lost}`:'—',
-             r.win_pct!=null?r.win_pct+'% win rate':'nothing settled')}
+             r.win_pct!=null?r.win_pct+'% win rate':'nothing closed')}
       ${stat('Fees', money(r.fees), `${r.orders_filled}/${r.orders_sent} orders filled`)}
     </div>
     ${(d.by_sport||[]).length ? `
@@ -884,15 +885,16 @@ async function loadKalshiReport(scope){
 
   const ss = d.settlements||[];
   $('#krec').innerHTML = err('settlements') + (!ss.length
-    ? `<p class="muted">Nothing has settled${ps.length
-        ? ` — <b>${ps.length}</b> position(s) still open`:''}. No P/L to report yet.</p>`
+    ? `<p class="muted">Nothing closed yet${ps.length
+        ? ` — <b>${ps.length}</b> position(s) still open`:''}. No P/L to report.</p>`
     : `<div class="scroll"><table><thead><tr>
-      <th class="l">Backed</th><th>Contracts</th><th>Cost</th><th>Returned</th>
-      <th>P/L</th><th class="l">Settled</th>
+      <th class="l">Backed</th><th class="l">How</th><th>Contracts</th>
+      <th>Cost</th><th>Returned</th><th>P/L</th><th class="l">Closed</th>
       </tr></thead><tbody>${ss.map(x=>`<tr>
       <td class="l"><span class="tag">${x.sport}</span>
         <span class="key"> ${x.backing}</span>
         <span class="sub">${x.ticker}</span></td>
+      <td class="l dim">${x.kind||''}</td>
       <td>${num(x.contracts,0)}</td>
       <td class="fig">${money(x.cost)}</td><td class="fig">${money(x.revenue)}</td>
       <td class="lead ${cls(x.pl)}">${signed(x.pl)}</td>

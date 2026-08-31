@@ -802,31 +802,109 @@ def api_kalshi_report():
         # jumpy and it is labelled as a mark rather than a value.
         p_["unrealised"] = round((p_["mark"] or 0.0) - (p_["traded"] or 0.0), 2)
 
-    settled = []
+    # ── the realised ledger ───────────────────────────────────────────────────
+    # Built from FILLS, not from settlements. A settlement is only one of the
+    # ways a position closes; a cash-out - selling the contracts back before the
+    # match resolves - never settles at all, so a settlements-only record simply
+    # lost those trades. A position cashed out for a profit vanished from the
+    # page entirely: no settlement row, and no longer an open position either.
+    #
+    # Cost comes from fills and NEVER from settlements. Both sources carry a
+    # cost figure, and adding them is the double-count trap.
+    #
+    # Verified against a real trade: 132 contracts bought at 0.36 and sold at
+    # 0.92 gives 121.44 - 47.52 = $73.92 gross, which is exactly the
+    # realized_pnl_dollars Kalshi reports for that market.
+    led: dict[str, dict] = {}
+
+    def row(t: str) -> dict:
+        return led.setdefault(str(t), {
+            "ticker": str(t), "bought": 0.0, "cost": 0.0, "sold": 0.0,
+            "proceeds": 0.0, "settled": 0.0, "revenue": 0.0, "fees": 0.0,
+            "settle_cost": 0.0, "at": None, "kind": set()})
+
+    for f in raw_fills:
+        t = f.get("ticker") or f.get("market_ticker")
+        if not t:
+            continue
+        r = row(t)
+        cnt = n(f.get("count_fp")) or 0.0
+        px = n(f.get("yes_price_dollars")) or 0.0
+        # bid = we bought, ask = we sold. Confirmed by reconciling a real
+        # round trip against Kalshi's own realised figure.
+        if str(f.get("book_side")) == "bid":
+            r["bought"] += cnt
+            r["cost"] += cnt * px
+        else:
+            r["sold"] += cnt
+            r["proceeds"] += cnt * px
+            r["kind"].add("cashed out")
+        r["fees"] += n(f.get("fee_cost")) or 0.0
+        at = f.get("created_time")
+        if at and (r["at"] is None or str(at) > str(r["at"])):
+            r["at"] = at
+
     for s_ in raw_settle:
-        # revenue is CENTS while the cost fields are dollars - mixing them is an
-        # easy way to report a P/L that is off by a factor of a hundred.
-        revenue = (n(s_.get("revenue")) or 0.0) / 100.0
-        cost = ((n(s_.get("yes_total_cost_dollars")) or 0.0)
-                + (n(s_.get("no_total_cost_dollars")) or 0.0))
-        fee = n(s_.get("fee_cost")) or 0.0
-        settled.append({
-            "ticker": s_.get("ticker"), "backing": name_of(s_.get("ticker")),
-            "sport": sport_of(s_.get("ticker")),
-            "result": s_.get("market_result"),
-            "contracts": n(s_.get("yes_count_fp")) or n(s_.get("no_count_fp")),
-            "cost": round(cost, 2), "revenue": round(revenue, 2),
-            "fee": round(fee, 2), "pl": round(revenue - cost - fee, 2),
-            "at": s_.get("settled_time"),
+        t = s_.get("ticker")
+        if not t:
+            continue
+        r = row(t)
+        # revenue is CENTS while the cost fields beside it are dollars.
+        r["revenue"] += (n(s_.get("revenue")) or 0.0) / 100.0
+        r["settled"] += (n(s_.get("yes_count_fp")) or 0.0) \
+            + (n(s_.get("no_count_fp")) or 0.0)
+        r["settle_cost"] += (n(s_.get("yes_total_cost_dollars")) or 0.0) \
+            + (n(s_.get("no_total_cost_dollars")) or 0.0)
+        r["fees"] += n(s_.get("fee_cost")) or 0.0
+        r["kind"].add("settled")
+        at = s_.get("settled_time")
+        if at and (r["at"] is None or str(at) > str(r["at"])):
+            r["at"] = at
+
+    closed, open_cost_by_ticker = [], {}
+    for t, r in led.items():
+        # Average cost, so a PARTIAL exit is priced correctly: selling 40 of 100
+        # realises the gain on 40 and leaves 60 open at the same average.
+        if r["bought"] > 0:
+            avg = r["cost"] / r["bought"]
+        elif r["settled"] > 0 and r["settle_cost"] > 0:
+            # The fills window does not reach back forever. For an older market
+            # the settlement's own cost is the only basis available.
+            avg = r["settle_cost"] / r["settled"]
+            r["bought"] = r["settled"]
+            r["cost"] = r["settle_cost"]
+        else:
+            avg = 0.0
+        closed_n = r["sold"] + r["settled"]
+        open_n = max(0.0, r["bought"] - closed_n)
+        if open_n > 0:
+            open_cost_by_ticker[t] = round(avg * open_n, 2)
+        if closed_n <= 0:
+            continue
+        basis = avg * closed_n
+        returned = r["proceeds"] + r["revenue"]
+        closed.append({
+            "ticker": t, "backing": name_of(t), "sport": sport_of(t),
+            "kind": " + ".join(sorted(r["kind"])) or "closed",
+            "contracts": round(closed_n, 2),
+            "cost": round(basis, 2),
+            "revenue": round(returned, 2),
+            "fee": round(r["fees"], 2),
+            "pl": round(returned - basis - r["fees"], 2),
+            "at": r["at"],
         })
-    settled.sort(key=lambda r: str(r.get("at") or ""), reverse=True)
-    out["settlements"] = settled
+    closed.sort(key=lambda x: str(x.get("at") or ""), reverse=True)
+    out["settlements"] = closed          # the page's "closed" table
+    settled = closed
 
     staked = sum(r["cost"] for r in settled)
     realised = sum(r["pl"] for r in settled)
     wins = sum(1 for r in settled if r["pl"] > 0)
     out["record"] = {
         "settled": len(settled), "won": wins, "lost": len(settled) - wins,
+        # A cash-out is a closed trade like any other. Counting only settlements
+        # dropped them from the record entirely.
+        "cashed_out": sum(1 for r in settled if "cashed out" in r["kind"]),
         "win_pct": round(100.0 * wins / len(settled), 1) if settled else None,
         "staked": round(staked, 2),
         "realised_pl": round(realised, 2),
@@ -1210,38 +1288,6 @@ def _kalshi_selftest() -> None:
             except Exception as e:
                 print(f"[kalshi]   {label}: FAILED {type(e).__name__}: "
                       f"{str(e)[:150]}", flush=True)
-        # A cash-out sells the contracts back, so the market never settles for
-        # them and no settlement row exists. Find out where Kalshi DOES record
-        # it - a sell fill, or a closed position carrying realised P/L - rather
-        # than guessing, which is how the last two of these went wrong.
-        try:
-            fl = kalshi.fills(limit=100)
-            sides = {}
-            for f in fl:
-                sides[str(f.get("book_side"))] = sides.get(str(f.get("book_side")), 0) + 1
-            print(f"[kalshi]   fills by book_side: {sides}", flush=True)
-            for f in fl[:3]:
-                print(f"[kalshi]     fill {f.get('ticker')} side={f.get('book_side')}"
-                      f"/{f.get('outcome_side')} n={f.get('count_fp')}"
-                      f" yes=${f.get('yes_price_dollars')} fee=${f.get('fee_cost')}",
-                      flush=True)
-            pods = [f for f in fl if "POD" in str(f.get("ticker","")).upper()]
-            print(f"[kalshi]   fills mentioning POD: {len(pods)}", flush=True)
-            for f in pods[:6]:
-                print(f"[kalshi]     POD {f.get('ticker')} side={f.get('book_side')}"
-                      f" n={f.get('count_fp')} yes=${f.get('yes_price_dollars')}"
-                      f" at={f.get('created_time')}", flush=True)
-            pos = kalshi.positions(limit=100)
-            nz = [x for x in pos if (kalshi.num(x.get("realized_pnl_dollars")) or 0) != 0]
-            print(f"[kalshi]   positions: {len(pos)} row(s), "
-                  f"{len(nz)} with realised P/L", flush=True)
-            for x in nz[:3]:
-                print(f"[kalshi]     {x.get('ticker')} pos={x.get('position_fp')}"
-                      f" realised=${x.get('realized_pnl_dollars')}"
-                      f" traded=${x.get('total_traded_dollars')}", flush=True)
-        except Exception as e:
-            print(f"[kalshi]   cashout probe FAILED {type(e).__name__}: {str(e)[:120]}",
-                  flush=True)
         try:
             mine = risk.placed_here()
             print(f"[kalshi]   ledger: {len(mine['tickers'])} ticker(s), "

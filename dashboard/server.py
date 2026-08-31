@@ -1210,6 +1210,38 @@ def _kalshi_selftest() -> None:
             except Exception as e:
                 print(f"[kalshi]   {label}: FAILED {type(e).__name__}: "
                       f"{str(e)[:150]}", flush=True)
+        # A cash-out sells the contracts back, so the market never settles for
+        # them and no settlement row exists. Find out where Kalshi DOES record
+        # it - a sell fill, or a closed position carrying realised P/L - rather
+        # than guessing, which is how the last two of these went wrong.
+        try:
+            fl = kalshi.fills(limit=100)
+            sides = {}
+            for f in fl:
+                sides[str(f.get("book_side"))] = sides.get(str(f.get("book_side")), 0) + 1
+            print(f"[kalshi]   fills by book_side: {sides}", flush=True)
+            for f in fl[:3]:
+                print(f"[kalshi]     fill {f.get('ticker')} side={f.get('book_side')}"
+                      f"/{f.get('outcome_side')} n={f.get('count_fp')}"
+                      f" yes=${f.get('yes_price_dollars')} fee=${f.get('fee_cost')}",
+                      flush=True)
+            pods = [f for f in fl if "POD" in str(f.get("ticker","")).upper()]
+            print(f"[kalshi]   fills mentioning POD: {len(pods)}", flush=True)
+            for f in pods[:6]:
+                print(f"[kalshi]     POD {f.get('ticker')} side={f.get('book_side')}"
+                      f" n={f.get('count_fp')} yes=${f.get('yes_price_dollars')}"
+                      f" at={f.get('created_time')}", flush=True)
+            pos = kalshi.positions(limit=100)
+            nz = [x for x in pos if (kalshi.num(x.get("realized_pnl_dollars")) or 0) != 0]
+            print(f"[kalshi]   positions: {len(pos)} row(s), "
+                  f"{len(nz)} with realised P/L", flush=True)
+            for x in nz[:3]:
+                print(f"[kalshi]     {x.get('ticker')} pos={x.get('position_fp')}"
+                      f" realised=${x.get('realized_pnl_dollars')}"
+                      f" traded=${x.get('total_traded_dollars')}", flush=True)
+        except Exception as e:
+            print(f"[kalshi]   cashout probe FAILED {type(e).__name__}: {str(e)[:120]}",
+                  flush=True)
         try:
             mine = risk.placed_here()
             print(f"[kalshi]   ledger: {len(mine['tickers'])} ticker(s), "

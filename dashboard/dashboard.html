@@ -59,6 +59,9 @@
   .Hard{background:rgba(63,127,201,.2);color:var(--hard)}
   .Carpet{background:rgba(140,120,190,.2);color:#8c78be}
   .up{color:var(--a)} .down{color:var(--b)} .dim{color:var(--dim)}
+  th[data-k]{cursor:pointer}
+  th[data-dir="asc"]::after{content:" ↑";color:var(--accent)}
+  th[data-dir="desc"]::after{content:" ↓";color:var(--accent)}
   .bigbar{display:flex;height:38px;border-radius:8px;overflow:hidden;margin:6px 0 4px}
   .bigbar div{display:flex;align-items:center;justify-content:center;
               font-weight:700;font-size:14px;color:#08130f}
@@ -209,7 +212,13 @@ function sortable(table){
   table.querySelectorAll('th[data-k]').forEach(th=>{
     th.onclick = () => {
       const k = th.dataset.k, body = table.tBodies[0];
-      const dir = th.dataset.dir === 'asc' ? -1 : 1;
+      /* First click on a money column should show the BIGGEST first — sorting a
+         column of EV ascending puts the worst row at the top, which is never
+         what the click meant. `data-first="desc"` opts a column into that;
+         everything else keeps ascending, so time sorts soonest-first. */
+      const dir = th.dataset.dir
+        ? (th.dataset.dir === 'asc' ? -1 : 1)
+        : (th.dataset.first === 'desc' ? -1 : 1);
       table.querySelectorAll('th').forEach(x=>x.removeAttribute('data-dir'));
       th.dataset.dir = dir === 1 ? 'asc' : 'desc';
       [...body.rows]
@@ -588,10 +597,19 @@ async function loadKalshi(){
     return;
   }
   $('#kal').innerHTML = head + toggle + `<div class="scroll"><table><thead><tr>
-      <th class="l">Backing</th><th class="l">Starts</th><th>Model</th><th>Price</th>
-      <th>Contracts</th><th>Stake</th><th>Fee</th><th>EV</th><th></th>
+      <th class="l" data-k="backing">Backing</th>
+      <th class="l" data-k="starts">Starts</th>
+      <th data-k="model" data-first="desc">Model</th>
+      <th data-k="price" data-first="desc">Price</th>
+      <th data-k="contracts" data-first="desc">Contracts</th>
+      <th data-k="stake" data-first="desc">Stake</th>
+      <th>Fee</th><th data-k="ev" data-first="desc">EV</th><th></th>
     </tr></thead><tbody>
-    ${rows.map((t,i)=>`<tr>
+    ${rows.map((t,i)=>`<tr data-backing="${t.backing||''}"
+      data-starts="${+new Date(t.starts)||0}"
+      data-model="${t.model_prob??0}" data-price="${t.price??0}"
+      data-contracts="${t.contracts??0}" data-stake="${t.stake??0}"
+      data-ev="${t.ev??0}">
       <td class="l"><span class="key">${t.backing}</span>
         <span class="sub">${t.match} · ${t.ticker}</span></td>
       <td class="l">${localTime(t.starts)}
@@ -609,11 +627,17 @@ async function loadKalshi(){
         : `<button data-k="${i}">Place…</button>`}</td>
     </tr>`).join('')}
     </tbody></table></div>
-    <p class="note">A ticket is not an order. Placing one asks for confirmation
-      first, and every limit is re-checked on the server — the browser is the
-      wrong place to enforce a spending cap.</p>` + whyBlock;
+    <p class="note">Click a column to re-sort. A ticket is not an order —
+      placing one asks for confirmation first, and every limit is re-checked on
+      the server, because the browser is the wrong place to enforce a spending
+      cap.</p>` + whyBlock;
 
   wireKalToggle();
+  /* Column sorting, using the same helper the rankings tables use. The default
+     order is still win probability - the sort is for looking at the same picks
+     another way, not for changing what leads. */
+  const kt = $('#kal').querySelector('table');
+  if(kt) sortable(kt);
   $('#kal').querySelectorAll('button[data-k]').forEach(btn => {
     btn.onclick = async () => {
       const t = rows[+btn.dataset.k];

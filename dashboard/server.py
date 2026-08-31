@@ -515,12 +515,32 @@ def api_kalshi_tickets():
     except Exception:
         pass
     tickets, skipped = [], []
+
+    def _ctx(f: dict) -> dict:
+        """
+        Context on a pick that did NOT become a ticket.
+
+        The Today page judges a pick against the BOOKMAKER's price; a Kalshi
+        ticket needs an edge at KALSHI's ask, which is a different number on a
+        different book. Carrying the start time and the model's probability lets
+        the page explain the gap instead of the pick just going missing.
+        """
+        return {"match": f"{f['player_a']} v {f['player_b']}",
+                "backing": (f.get("bet") or {}).get("player"),
+                "tour": str(f.get("tour", "")).lower(),
+                "starts": f.get("commence_time"),
+                "model_prob": (f.get("model_prob_a") if
+                               (f.get("bet") or {}).get("side") == "A"
+                               else (1.0 - f["model_prob_a"]
+                                     if f.get("model_prob_a") is not None else None)),
+                "book_odds": (f.get("bet") or {}).get("odds")}
+
     for f in picks:
         tour = str(f.get("tour", "atp")).lower()
         found = kalshi_match.find_market(f["player_a"], f["player_b"], tour,
                                          events=events.get(tour))
         if not found.get("ok"):
-            skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+            skipped.append({**_ctx(f),
                             "reason": found.get("reason")})
             continue
         bet = f["bet"]
@@ -528,21 +548,21 @@ def api_kalshi_tickets():
         market = found["a"] if backing_a else found["b"]
         price = kalshi_match.ask_price(market)
         if price is None:
-            skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+            skipped.append({**_ctx(f),
                             "reason": "no offer resting on that contract"})
             continue
         prob = f["model_prob_a"] if backing_a else 1.0 - f["model_prob_a"]
         sized = kalshi.size_position(prob, price, bankroll, maker=risk.MAKER,
                                      max_stake_pct=budget["ticket_pct"])
         if sized["contracts"] < 1:
-            skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+            skipped.append({**_ctx(f),
                             "reason": sized.get("reason") or "sized to nothing"})
             continue
         # A match already under way is not a ticket. The model priced it before
         # it began, and Kalshi keeps the market ACTIVE through the match, so
         # nothing about the market's own status would stop this.
         if kalshi_order.started(market):
-            skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+            skipped.append({**_ctx(f),
                             "reason": "the match has already started"})
             continue
         # Never ask for more than is actually offered. Sizing past the resting
@@ -552,7 +572,7 @@ def api_kalshi_tickets():
         capped = False
         if offered is not None and sized["contracts"] > int(offered):
             if int(offered) < 1:
-                skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+                skipped.append({**_ctx(f),
                                 "reason": "nothing offered at the ask"})
                 continue
             capped = True
@@ -561,7 +581,7 @@ def api_kalshi_tickets():
                 max_stake_pct=min(budget["ticket_pct"],
                                   100.0 * int(offered) * price / max(bankroll, 1e-9)))
             if sized["contracts"] < 1:
-                skipped.append({"match": f"{f['player_a']} v {f['player_b']}",
+                skipped.append({**_ctx(f),
                                 "reason": "offered size too small to trade"})
                 continue
         tickets.append({

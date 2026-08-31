@@ -546,11 +546,34 @@ async function loadKalshi(){
       : `Showing <b>all upcoming</b> fixtures.`}
     <a href="#" id="kaltoggle">${KAL_TODAY_ONLY?'show all':'today only'}</a></p>`;
 
+  /* Why the other picks are not here. This used to render ONLY when there were
+     no tickets at all, so with two showing there was no way to tell whether the
+     Today page's other picks had been considered and rejected, or silently
+     lost. The gap is real and has several distinct causes, and the count never
+     matching Today's is the normal case, not a fault. */
+  const skipped = (d.skipped||[]).filter(x =>
+    !KAL_TODAY_ONLY || !x.starts || localDay(x.starts) === today);
+  const byReason = {};
+  skipped.forEach(x => (byReason[x.reason||'unknown'] ||= []).push(x));
+  const whyBlock = !skipped.length ? '' : `
+    <h3>Not tradeable (${skipped.length})</h3>
+    <p class="muted">The Today page prices a pick against the <b>bookmaker</b>.
+      A ticket needs an edge at <b>Kalshi's</b> ask, on a market that exists and
+      has something resting on it — so Today will normally show more.</p>
+    <div class="scroll"><table><thead><tr>
+      <th class="l">Why</th><th class="l">Matches</th></tr></thead><tbody>
+    ${Object.entries(byReason).map(([reason, xs])=>`<tr>
+      <td class="l"><span class="key">${reason}</span>
+        <span class="sub">${xs.length} pick(s)</span></td>
+      <td class="l">${xs.map(x=>`${x.backing||x.match}${
+        x.model_prob!=null?` <span class="dim">(${pct(x.model_prob)})</span>`:''}`)
+        .join('<br>')}</td>
+    </tr>`).join('')}
+    </tbody></table></div>`;
+
   if(!rows.length){
-    const why = (d.skipped||[]).slice(0,6).map(x =>
-      `<li class="muted">${x.match} — ${x.reason}</li>`).join('');
     $('#kal').innerHTML = head + toggle
-      + `<p class="muted">No tickets for today.</p>` + (why ? `<ul>${why}</ul>` : '');
+      + `<p class="muted">No tickets for today.</p>` + whyBlock;
     wireKalToggle();
     return;
   }
@@ -578,7 +601,7 @@ async function loadKalshi(){
     </tbody></table></div>
     <p class="note">A ticket is not an order. Placing one asks for confirmation
       first, and every limit is re-checked on the server — the browser is the
-      wrong place to enforce a spending cap.</p>`;
+      wrong place to enforce a spending cap.</p>` + whyBlock;
 
   wireKalToggle();
   $('#kal').querySelectorAll('button[data-k]').forEach(btn => {

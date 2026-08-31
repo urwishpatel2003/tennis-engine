@@ -154,6 +154,44 @@ check("the odds feed time is used",
 check("every ticket has one", all(t.get("starts") for t in d["tickets"]), str(starts))
 
 
+print("")
+print("9. a pick that is not tradeable says why, per pick")
+FUTURE = "2030-01-01T00:00:00Z"   # fixed, so the clock cannot age it out
+# The question this answers is "where did MY pick go", so every skipped pick
+# keeps its own row: who was backed, when it starts, and the two prices that
+# disagreed. Grouping by reason read as a summary and lost the pick.
+kalshi_match.find_market = lambda a, b, tour, events=None: (
+    {"ok": True, "event": "E", "match_type": "full name",
+     "a": {"ticker": "KXWTAMATCH-Z-A", "yes_sub_title": a,
+           "yes_ask_dollars": "0.9000", "yes_ask_size_fp": "9000.00",
+           "status": "active", "occurrence_datetime": FUTURE},
+     "b": {"ticker": "KXWTAMATCH-Z-B", "yes_sub_title": b,
+           "yes_ask_dollars": "0.1000", "yes_ask_size_fp": "9000.00",
+           "status": "active"}, "a_name": a, "b_name": b}
+    if a == "Alycia Parks" else {"ok": False, "reason": "no Kalshi market"})
+d5 = server.app.test_client().get("/api/kalshi/tickets").get_json()
+sk = {x.get("backing"): x for x in d5["skipped"]}
+check("every pick is listed separately", len(d5["skipped"]) == 3, str(len(d5["skipped"])))
+check("each row names who was backed", all(x.get("backing") for x in d5["skipped"]),
+      str(sk.keys()))
+check("each row carries the reason", all(x.get("reason") for x in d5["skipped"]))
+check("each row carries the start time", all(x.get("starts") for x in d5["skipped"]))
+check("each row carries the model probability",
+      all(x.get("model_prob") is not None for x in d5["skipped"]))
+check("each row carries the bookmaker price",
+      all(x.get("book_odds") is not None for x in d5["skipped"]))
+
+# The distinction that matters: a Kalshi price present means the model liked it
+# and the exchange price removed the edge. Absent means there was nothing to buy.
+priced = sk.get("Alycia Parks") or {}
+check("a priced-out pick shows Kalshi's ask", priced.get("price") == 0.90, str(priced))
+check("and blames the price, not the market",
+      "edge" in str(priced.get("reason")), str(priced.get("reason")))
+unlisted = sk.get("Elise Mertens") or {}
+check("a fixture with no market has no Kalshi price",
+      unlisted.get("price") is None, str(unlisted))
+
+
 print(f"\n{'='*54}")
 print(f"  {PASS} passed, {FAIL} failed")
 print(f"{'='*54}\n")

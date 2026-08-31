@@ -553,23 +553,33 @@ async function loadKalshi(){
      matching Today's is the normal case, not a fault. */
   const skipped = (d.skipped||[]).filter(x =>
     !KAL_TODAY_ONLY || !x.starts || localDay(x.starts) === today);
-  const byReason = {};
-  skipped.forEach(x => (byReason[x.reason||'unknown'] ||= []).push(x));
+  /* One row per pick, same shape as the tickets above, with the reason as a
+     column. Grouping by reason read as a summary; the question being asked is
+     "where did MY pick go", which is a question about a pick. */
+  skipped.sort((a,b)=>(b.model_prob||0)-(a.model_prob||0));
   const whyBlock = !skipped.length ? '' : `
-    <h3>Not tradeable (${skipped.length})</h3>
+    <h3>Model picks that are not tradeable (${skipped.length})</h3>
     <p class="muted">The Today page prices a pick against the <b>bookmaker</b>.
       A ticket needs an edge at <b>Kalshi's</b> ask, on a market that exists and
       has something resting on it — so Today will normally show more.</p>
     <div class="scroll"><table><thead><tr>
-      <th class="l">Why</th><th class="l">Matches</th></tr></thead><tbody>
-    ${Object.entries(byReason).map(([reason, xs])=>`<tr>
-      <td class="l"><span class="key">${reason}</span>
-        <span class="sub">${xs.length} pick(s)</span></td>
-      <td class="l">${xs.map(x=>`${x.backing||x.match}${
-        x.model_prob!=null?` <span class="dim">(${pct(x.model_prob)})</span>`:''}`)
-        .join('<br>')}</td>
+      <th class="l">Backing</th><th class="l">Starts</th><th>Model</th>
+      <th>Book</th><th>Kalshi</th><th class="l">Why not</th>
+    </tr></thead><tbody>
+    ${skipped.map(x=>`<tr>
+      <td class="l"><span class="key">${x.backing||'—'}</span>
+        <span class="sub">${x.match}</span></td>
+      <td class="l">${x.starts?localTime(x.starts):'—'}
+        <span class="sub">${x.starts?startsIn(x.starts):''}</span></td>
+      <td class="fig">${x.model_prob!=null?pct(x.model_prob):'—'}</td>
+      <td class="fig">${x.book_odds!=null?num(x.book_odds,2):'—'}</td>
+      <td class="fig">${x.price!=null?num(x.price,2):'—'}</td>
+      <td class="l dim">${x.reason||'unknown'}</td>
     </tr>`).join('')}
-    </tbody></table></div>`;
+    </tbody></table></div>
+    <p class="note">A <b>Kalshi</b> price with no ticket means the model liked
+      the pick and Kalshi's price removed the edge — the bookmaker and the
+      exchange disagree. A blank one means there was nothing to buy.</p>`;
 
   if(!rows.length){
     $('#kal').innerHTML = head + toggle

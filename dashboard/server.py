@@ -556,6 +556,7 @@ def api_kalshi_tickets():
                                      max_stake_pct=budget["ticket_pct"])
         if sized["contracts"] < 1:
             skipped.append({**_ctx(f),
+                            "price": price,
                             "reason": sized.get("reason") or "sized to nothing"})
             continue
         # A match already under way is not a ticket. The model priced it before
@@ -563,6 +564,7 @@ def api_kalshi_tickets():
         # nothing about the market's own status would stop this.
         if kalshi_order.started(market):
             skipped.append({**_ctx(f),
+                            "price": price,
                             "reason": "the match has already started"})
             continue
         # Never ask for more than is actually offered. Sizing past the resting
@@ -573,6 +575,7 @@ def api_kalshi_tickets():
         if offered is not None and sized["contracts"] > int(offered):
             if int(offered) < 1:
                 skipped.append({**_ctx(f),
+                                "price": price,
                                 "reason": "nothing offered at the ask"})
                 continue
             capped = True
@@ -582,6 +585,7 @@ def api_kalshi_tickets():
                                   100.0 * int(offered) * price / max(bankroll, 1e-9)))
             if sized["contracts"] < 1:
                 skipped.append({**_ctx(f),
+                                "price": price, "offered": offered,
                                 "reason": "offered size too small to trade"})
                 continue
         tickets.append({

@@ -130,17 +130,30 @@ def build_payload(ticker: str, count: int, price: float,
 
 
 
-def started(market: dict, now: datetime | None = None) -> bool | None:
+def started(market: dict, now: datetime | None = None,
+            starts: str | None = None) -> bool | None:
     """
-    Has the match begun? None means the market did not say.
+    Has the match begun? None means nothing trustworthy said when it starts.
 
-    Kalshi carries the scheduled start as `occurrence_datetime`, and a match
-    market stays ACTIVE right through the match - its own early_close_condition
-    reads "this market will close and expire after a winner is declared". So an
-    open market is not evidence that play has not started, and the status check
-    alone would let an in-play ticket through.
+    A match market stays ACTIVE right through play - Kalshi's own
+    early_close_condition reads "this market will close and expire after a
+    winner is declared" - so an open market is not evidence that play has not
+    started, and a status check alone would let an in-play ticket through.
+
+    `starts` is the ODDS FEED's commence_time and is the only source trusted
+    here. Kalshi's `occurrence_datetime` was used first and is NOT a per-match
+    start: a live pull had all 125 open tennis markets reporting a start in the
+    past, dozens of different matches sharing one identical timestamp
+    (2026-08-30T18:00:00Z). It is a session marker for the day, not a match
+    time, and gating on it refused almost every ticket - including matches three
+    hours away, whose own countdown was still ticking down beside the refusal.
+
+    With no `starts` this returns None rather than guessing from a field known
+    to be wrong. The caller decides what an unknown start means; on the order
+    path it is a refusal, because a ticket built by this server always carries
+    one and its absence means the ticket did not come from here.
     """
-    raw = market.get("occurrence_datetime")
+    raw = starts
     if not raw:
         return None
     try:
@@ -154,7 +167,8 @@ def started(market: dict, now: datetime | None = None) -> bool | None:
 
 def verify_market(ticker: str, count: int, price: float,
                   market: dict | None = None,
-                  now: datetime | None = None) -> dict:
+                  now: datetime | None = None,
+                  starts: str | None = None) -> dict:
     """
     Re-read the market and decide whether this ticket is still the trade.
 
@@ -197,9 +211,10 @@ def verify_market(ticker: str, count: int, price: float,
     # the ask falls, and a bid built on a pre-match number fills against news the
     # model has never seen. A missing start time is a refusal too - on a money
     # path, not knowing is not the same as knowing it is fine.
-    began = started(m, now)
+    began = started(m, now, starts)
     if began is None:
-        out["reason"] = "the market did not say when the match starts"
+        out["reason"] = ("no start time for this fixture - re-scan to rebuild "
+                         "the ticket")
         return out
     if began:
         out["reason"] = ("the match has already started; this ticket was priced "
@@ -230,7 +245,8 @@ def verify_market(ticker: str, count: int, price: float,
 
 
 def create_order(ticker: str, count: int, price: float, client_order_id: str,
-                 dry_run: bool | None = None, post_only: bool = False) -> dict:
+                 dry_run: bool | None = None, post_only: bool = False,
+                 starts: str | None = None) -> dict:
     """
     Place one order. Returns what happened, including the payload either way.
 
@@ -285,7 +301,7 @@ def create_order(ticker: str, count: int, price: float, client_order_id: str,
     # much may be risked; this says whether the thing being bought is still the
     # thing that was priced. A dry run runs it too - a guard that only engages
     # with real money on the line has never been tested.
-    fresh = verify_market(ticker, count, price)
+    fresh = verify_market(ticker, count, price, starts=starts)
     out["market"] = fresh
     if not fresh["ok"]:
         out["error"] = fresh["reason"]

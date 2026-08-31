@@ -51,11 +51,11 @@ FIXTURES = {"fixtures": [
      "bet": {"side": "A", "odds": 2.68, "player": "Diane Parry"}},
     {"player_a": "Elise Mertens", "player_b": "Yuliia Starodubtseva", "tour": "wta",
      "tournament": "Cleveland", "model_prob_a": 0.76,
-     "commence_time": "2026-08-28T05:40:00Z",
+     "commence_time": "2030-01-01T05:40:00Z",
      "bet": {"side": "A", "odds": 1.41, "player": "Elise Mertens"}},
 ]}
-FIXTURES["fixtures"][0]["commence_time"] = "2026-08-28T00:00:00Z"
-FIXTURES["fixtures"][1]["commence_time"] = "2026-08-28T04:30:00Z"
+FIXTURES["fixtures"][0]["commence_time"] = "2030-01-01T00:00:00Z"
+FIXTURES["fixtures"][1]["commence_time"] = "2030-01-01T04:30:00Z"
 MARKETS = {
     ("Alycia Parks", "Ann Li"): HELD,
     ("Diane Parry", "Clara Tauson"): SENT,
@@ -150,7 +150,7 @@ print("")
 print("8. each ticket says when the match starts")
 starts = {t["backing"]: t["starts"] for t in d["tickets"]}
 check("the odds feed time is used",
-      starts["Elise Mertens"] == "2026-08-28T05:40:00Z", str(starts))
+      starts["Elise Mertens"] == "2030-01-01T05:40:00Z", str(starts))
 check("every ticket has one", all(t.get("starts") for t in d["tickets"]), str(starts))
 
 

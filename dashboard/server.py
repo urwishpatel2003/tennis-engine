@@ -459,6 +459,12 @@ def api_fixtures():
     return jsonify(_clean(d))
 
 
+# ticker -> the odds feed's start time, filled by the last scan. Kalshi cannot
+# be asked this: its occurrence_datetime is a session marker shared by dozens of
+# matches, not a per-match start.
+TICKET_STARTS: dict[str, str] = {}
+
+
 @app.route("/api/kalshi/tickets")
 def api_kalshi_tickets():
     """
@@ -562,7 +568,7 @@ def api_kalshi_tickets():
         # A match already under way is not a ticket. The model priced it before
         # it began, and Kalshi keeps the market ACTIVE through the match, so
         # nothing about the market's own status would stop this.
-        if kalshi_order.started(market):
+        if kalshi_order.started(market, starts=f.get("commence_time")):
             skipped.append({**_ctx(f),
                             "price": price,
                             "reason": "the match has already started"})
@@ -602,8 +608,7 @@ def api_kalshi_tickets():
             # When the match starts. The odds feed is the model's own source, so
             # it leads; Kalshi's scheduled start is the fallback for a fixture
             # whose feed row carries no time.
-            "starts": (f.get("commence_time")
-                       or market.get("occurrence_datetime")),
+            "starts": f.get("commence_time"),
             "held": held.get(str(market.get("ticker"))),
             "already_placed": str(market.get("ticker")) in held,
             "client_order_id": kalshi_order.new_client_order_id(),
@@ -613,6 +618,10 @@ def api_kalshi_tickets():
     # the top - a 12% pick at a big enough price can out-EV a 70% one - which
     # puts the least likely bets in the most prominent place. Ties break on EV,
     # so among equally likely picks the better-priced one still leads.
+    for t in tickets:
+        if t.get("starts"):
+            TICKET_STARTS[str(t["ticker"])] = str(t["starts"])
+
     tickets.sort(key=lambda t: (-(t["model_prob"] or 0), -(t["ev"] or 0)))
     return jsonify(_clean({
         "available": True, "tickets": tickets, "skipped": skipped,
@@ -910,7 +919,8 @@ def api_kalshi_submit():
                         "error": "ticker, contracts, price and client_order_id "
                                  "are all required"}), 400
 
-    result = kalshi_order.create_order(ticker, count, price, coid)
+    result = kalshi_order.create_order(ticker, count, price, coid,
+                                       starts=TICKET_STARTS.get(ticker))
     # Log the attempt, not just the sends. A refusal is the interesting event -
     # it is the guard doing its job - and until now it went only to the browser,
     # which made "it said refused" impossible to diagnose from the logs.
